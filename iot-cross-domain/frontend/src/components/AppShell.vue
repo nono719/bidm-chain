@@ -11,7 +11,8 @@ import {
   SafetyCertificateOutlined,
   TeamOutlined,
   CheckCircleOutlined,
-  SettingOutlined
+  SettingOutlined,
+  BlockOutlined
 } from '@ant-design/icons-vue'
 import { apiRequest, getBaseURL, getToken, getUser, setBaseURL, setToken, setUser } from '../api/client'
 
@@ -28,7 +29,8 @@ const navItems = computed(() => {
     { key: '/trust-policies', label: '信任策略', icon: SafetyCertificateOutlined },
     { key: '/auth/cross-domain', label: '跨域认证', icon: SafetyCertificateOutlined },
     { key: '/monitor', label: '状态监控', icon: MonitorOutlined },
-    { key: '/audit', label: '审计日志', icon: AuditOutlined }
+    { key: '/audit', label: '审计日志', icon: AuditOutlined },
+    { key: '/chain', label: '联盟链浏览', icon: BlockOutlined }
   ]
   if (!currentUser.value?.role) {
     return base.filter((i) => i.key !== '/trust-policies')

@@ -106,6 +106,11 @@ func main() {
 		auth.GET("/oracle/check/:deviceDid", h.OracleCheck)
 		auth.GET("/audit/logs", h.AuditLogs)
 		auth.GET("/audit/search", h.AuditSearch)
+		auth.GET("/chain/info", h.ChainInfo)
+		auth.GET("/chain/topology", h.ChainTopology)
+		auth.GET("/chain/blocks", h.ChainBlocks)
+		auth.GET("/chain/blocks/:num", h.ChainBlockDetail)
+		auth.POST("/chain/verify", h.ChainVerify)
 		auth.GET("/operations/catalog", h.ListOperationCatalog)
 		auth.GET("/operations/history", h.ListOperationHistory)
 

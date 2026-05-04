@@ -10,6 +10,7 @@ import Users from './pages/Users.vue'
 import Approvals from './pages/Approvals.vue'
 import TrustPolicies from './pages/TrustPolicies.vue'
 import SystemManage from './pages/SystemManage.vue'
+import Chain from './pages/Chain.vue'
 import Login from './pages/Login.vue'
 
 const router = createRouter({
@@ -25,7 +26,8 @@ const router = createRouter({
     { path: '/audit', name: 'audit', component: Audit },
     { path: '/users', name: 'users', component: Users },
     { path: '/trust-policies', name: 'trustPolicies', component: TrustPolicies },
-    { path: '/system/manage', name: 'systemManage', component: SystemManage }
+    { path: '/system/manage', name: 'systemManage', component: SystemManage },
+    { path: '/chain', name: 'chain', component: Chain }
   ]
 })
 

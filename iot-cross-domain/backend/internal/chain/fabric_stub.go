@@ -2,6 +2,7 @@ package chain
 
 import (
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -14,9 +15,12 @@ import (
 
 	"github.com/hyperledger/fabric-gateway/pkg/client"
 	"github.com/hyperledger/fabric-gateway/pkg/identity"
+	commonpb "github.com/hyperledger/fabric-protos-go-apiv2/common"
+	peerpb "github.com/hyperledger/fabric-protos-go-apiv2/peer"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/proto"
 )
 
 type AnchorResult struct {
@@ -24,15 +28,42 @@ type AnchorResult struct {
 	BlockHeight uint64 `json:"blockHeight"`
 }
 
+type ChainInfo struct {
+	Height            uint64 `json:"height"`
+	CurrentBlockHash  string `json:"currentBlockHash"`
+	PreviousBlockHash string `json:"previousBlockHash"`
+}
+
+type BlockSummary struct {
+	Number       uint64 `json:"number"`
+	DataHash     string `json:"dataHash"`
+	PreviousHash string `json:"previousHash"`
+	TxCount      int    `json:"txCount"`
+}
+
+type TxDetail struct {
+	TxID              string `json:"txId"`
+	ValidationCode    int32  `json:"validationCode"`
+	ValidationMessage string `json:"validationMessage"`
+	Valid             bool   `json:"valid"`
+	BlockHeight       uint64 `json:"blockHeight,omitempty"`
+}
+
 type Service interface {
 	Anchor(bizType string, bizRef string, digest string) (AnchorResult, error)
+	ChainInfo() (*ChainInfo, error)
+	BlockByNumber(num uint64) (*BlockSummary, error)
+	TransactionByID(txID string) (*TxDetail, error)
+	ChannelName() string
 }
 
 type FabricGatewayService struct {
-	clientConn *grpc.ClientConn
-	gateway    *client.Gateway
-	contract   *client.Contract
-	anchorFunc string
+	clientConn  *grpc.ClientConn
+	gateway     *client.Gateway
+	contract    *client.Contract
+	qscc        *client.Contract
+	channelName string
+	anchorFunc  string
 }
 
 func NewFabricGatewayService(cfg config.FabricConfig) (*FabricGatewayService, error) {
@@ -87,11 +118,14 @@ func NewFabricGatewayService(cfg config.FabricConfig) (*FabricGatewayService, er
 
 	network := gw.GetNetwork(cfg.ChannelName)
 	contract := network.GetContract(cfg.ChaincodeName)
+	qscc := network.GetContract("qscc")
 	return &FabricGatewayService{
-		clientConn: clientConn,
-		gateway:    gw,
-		contract:   contract,
-		anchorFunc: cfg.AnchorFunction,
+		clientConn:  clientConn,
+		gateway:     gw,
+		contract:    contract,
+		qscc:        qscc,
+		channelName: cfg.ChannelName,
+		anchorFunc:  cfg.AnchorFunction,
 	}, nil
 }
 
@@ -151,6 +185,78 @@ func (s *FabricGatewayService) Anchor(bizType string, bizRef string, digest stri
 	return AnchorResult{
 		TxHash:      commit.TransactionID(),
 		BlockHeight: status.BlockNumber,
+	}, nil
+}
+
+func (s *FabricGatewayService) ChannelName() string {
+	return s.channelName
+}
+
+func (s *FabricGatewayService) ChainInfo() (*ChainInfo, error) {
+	if s.qscc == nil {
+		return nil, errors.New("qscc not initialized")
+	}
+	result, err := s.qscc.EvaluateTransaction("GetChainInfo", s.channelName)
+	if err != nil {
+		return nil, err
+	}
+	info := &commonpb.BlockchainInfo{}
+	if err := proto.Unmarshal(result, info); err != nil {
+		return nil, fmt.Errorf("decode BlockchainInfo: %w", err)
+	}
+	return &ChainInfo{
+		Height:            info.Height,
+		CurrentBlockHash:  hex.EncodeToString(info.CurrentBlockHash),
+		PreviousBlockHash: hex.EncodeToString(info.PreviousBlockHash),
+	}, nil
+}
+
+func (s *FabricGatewayService) BlockByNumber(num uint64) (*BlockSummary, error) {
+	if s.qscc == nil {
+		return nil, errors.New("qscc not initialized")
+	}
+	result, err := s.qscc.EvaluateTransaction("GetBlockByNumber", s.channelName, fmt.Sprintf("%d", num))
+	if err != nil {
+		return nil, err
+	}
+	block := &commonpb.Block{}
+	if err := proto.Unmarshal(result, block); err != nil {
+		return nil, fmt.Errorf("decode Block: %w", err)
+	}
+	out := &BlockSummary{}
+	if block.Header != nil {
+		out.Number = block.Header.Number
+		out.DataHash = hex.EncodeToString(block.Header.DataHash)
+		out.PreviousHash = hex.EncodeToString(block.Header.PreviousHash)
+	}
+	if block.Data != nil {
+		out.TxCount = len(block.Data.Data)
+	}
+	return out, nil
+}
+
+func (s *FabricGatewayService) TransactionByID(txID string) (*TxDetail, error) {
+	if s.qscc == nil {
+		return nil, errors.New("qscc not initialized")
+	}
+	result, err := s.qscc.EvaluateTransaction("GetTransactionByID", s.channelName, txID)
+	if err != nil {
+		return nil, err
+	}
+	pt := &peerpb.ProcessedTransaction{}
+	if err := proto.Unmarshal(result, pt); err != nil {
+		return nil, fmt.Errorf("decode ProcessedTransaction: %w", err)
+	}
+	code := pt.ValidationCode
+	name := peerpb.TxValidationCode_name[code]
+	if name == "" {
+		name = fmt.Sprintf("UNKNOWN(%d)", code)
+	}
+	return &TxDetail{
+		TxID:              txID,
+		ValidationCode:    code,
+		ValidationMessage: name,
+		Valid:             code == int32(peerpb.TxValidationCode_VALID),
 	}, nil
 }
 
