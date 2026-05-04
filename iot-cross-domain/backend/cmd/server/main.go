@@ -117,10 +117,14 @@ func main() {
 		auth.POST("/chain/demo/restore", h.ChainDemoRestore)
 		auth.GET("/operations/catalog", h.ListOperationCatalog)
 		auth.GET("/operations/history", h.ListOperationHistory)
+		auth.GET("/cross/active-session", h.CrossActiveSession)
 
 		protected := auth.Group("/operations")
 		protected.Use(middleware.RequireCrossDomainAuth(conn))
 		protected.POST("/protected", h.ProtectedOperation)
+		protected.GET("/remote/profile", h.RemoteProfile)
+		protected.GET("/remote/telemetry", h.RemoteTelemetry)
+		protected.GET("/remote/audit-trail", h.RemoteAuditTrail)
 	}
 
 	log.Printf("server listening on :%s", cfg.Port)

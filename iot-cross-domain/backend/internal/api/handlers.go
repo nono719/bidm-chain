@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"iot-cross-domain/backend/internal/chain"
+	"iot-cross-domain/backend/internal/middleware"
 	"iot-cross-domain/backend/internal/model"
 	"iot-cross-domain/backend/internal/oracle"
 	"iot-cross-domain/backend/internal/pkgutil"
@@ -870,8 +871,27 @@ func (h *Handler) RevokeCrossDomainAuth(c *gin.Context) {
 		response.InternalError(c, "revoke failed")
 		return
 	}
-	_ = h.auditEx(model.AuditLog{Module: "cross_auth", Action: "revoke", Operator: c.GetString("username"), Result: "OK", SubjectDID: session.DeviceDID, Message: session.RequestID, DetailJSON: mustJSON(gin.H{"reason": session.RevokeReason})})
-	response.OK(c, gin.H{"requestId": session.RequestID, "status": session.Status, "revokedBy": session.RevokedBy, "revokedAt": session.RevokedAt, "reason": session.RevokeReason})
+
+	// Anchor the revocation on chain so it's auditable on-chain too.
+	var chainReceipt gin.H
+	if anchored, err := h.AnchorOpOnChain("token_revoke", session.RequestID, session.RevokedBy+"|"+session.RevokeReason); err == nil && anchored != nil {
+		chainReceipt = h.enrichChainReceipt(anchored.TxHash, anchored.BlockHeight)
+	}
+
+	auditLog := model.AuditLog{Module: "cross_auth", Action: "revoke", Operator: c.GetString("username"), Result: "OK", SubjectDID: session.DeviceDID, Message: session.RequestID, DetailJSON: mustJSON(gin.H{"reason": session.RevokeReason})}
+	if chainReceipt != nil {
+		if tx, ok := chainReceipt["txHash"].(string); ok {
+			auditLog.TxHash = tx
+		}
+		if bh, ok := chainReceipt["blockHeight"].(uint64); ok {
+			auditLog.BlockHeight = bh
+		}
+		auditLog.Contract = "anchorcc"
+		auditLog.Method = "AnchorRecord"
+	}
+	_ = h.auditEx(auditLog)
+
+	response.OK(c, gin.H{"requestId": session.RequestID, "status": session.Status, "revokedBy": session.RevokedBy, "revokedAt": session.RevokedAt, "reason": session.RevokeReason, "chain": chainReceipt})
 }
 
 func (h *Handler) ApproveCrossDomainAuth(c *gin.Context) {
@@ -1224,7 +1244,7 @@ func (h *Handler) ProtectedOperation(c *gin.Context) {
 			return
 		}
 	}
-	targetDomain := strings.TrimSpace(c.GetHeader("X-Target-Domain"))
+	targetDomain := strings.TrimSpace(middleware.HeaderDecoded(c, "X-Target-Domain"))
 	if targetDomain == "" || targetDomain != strings.TrimSpace(req.DomainCode) {
 		response.BadRequest(c, "domainCode does not match X-Target-Domain")
 		return
@@ -1263,7 +1283,30 @@ func (h *Handler) ProtectedOperation(c *gin.Context) {
 		response.InternalError(c, "create operation failed")
 		return
 	}
-	_ = h.auditEx(model.AuditLog{
+
+	// Real-ize: mutate device state for write ops; read ops return no-mutation.
+	effect, effectErr := h.applyOperationEffect(meta.Operation, &device, req.Payload)
+	effectMsg := ""
+	if effect != nil {
+		effectMsg = effect.Description
+	}
+	if effectErr != nil {
+		effectMsg = "effect_error: " + effectErr.Error()
+	}
+
+	// Anchor write operations on chain (skip pure-read ops).
+	var chainReceipt gin.H
+	isWrite := meta.RequiredPermission == "WRITE" || meta.RequiredPermission == "ADMIN"
+	if isWrite && effectErr == nil {
+		anchored, err := h.AnchorOpOnChain("protected_op", req.DeviceDID, req.Operation+"|"+req.Payload)
+		if err == nil && anchored != nil {
+			chainReceipt = h.enrichChainReceipt(anchored.TxHash, anchored.BlockHeight)
+		} else if err != nil {
+			chainReceipt = gin.H{"error": err.Error()}
+		}
+	}
+
+	auditLog := model.AuditLog{
 		Module:     "operation",
 		Action:     "protected_execute",
 		Operator:   c.GetString("username"),
@@ -1272,8 +1315,19 @@ func (h *Handler) ProtectedOperation(c *gin.Context) {
 		Method:     meta.Operation,
 		SubjectDID: req.DeviceDID,
 		Message:    meta.Operation,
-		DetailJSON: mustJSON(gin.H{"payload": req.Payload, "domain": req.DomainCode, "requiredPermission": meta.RequiredPermission, "resource": meta.Resource}),
-	})
+		DetailJSON: mustJSON(gin.H{"payload": req.Payload, "domain": req.DomainCode, "requiredPermission": meta.RequiredPermission, "resource": meta.Resource, "effect": effectMsg}),
+	}
+	if chainReceipt != nil {
+		if tx, ok := chainReceipt["txHash"].(string); ok {
+			auditLog.TxHash = tx
+		}
+		if bh, ok := chainReceipt["blockHeight"].(uint64); ok {
+			auditLog.BlockHeight = bh
+		}
+		auditLog.Contract = "anchorcc"
+	}
+	_ = h.auditEx(auditLog)
+
 	response.OK(c, gin.H{
 		"id":                 op.ID,
 		"deviceDid":          op.DeviceDID,
@@ -1284,6 +1338,8 @@ func (h *Handler) ProtectedOperation(c *gin.Context) {
 		"createdAt":          op.CreatedAt,
 		"requiredPermission": meta.RequiredPermission,
 		"resource":           meta.Resource,
+		"effect":             effect,
+		"chain":              chainReceipt,
 	})
 }
 

@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"net/url"
 	"time"
 
 	"iot-cross-domain/backend/internal/model"
@@ -10,11 +11,21 @@ import (
 	"gorm.io/gorm"
 )
 
+// HeaderDecoded reads a header and URL-decodes it so non-ASCII values
+// (e.g. Chinese domain codes) sent as %XX-encoded bytes survive the trip.
+func HeaderDecoded(c *gin.Context, key string) string {
+	v := c.GetHeader(key)
+	if decoded, err := url.QueryUnescape(v); err == nil {
+		return decoded
+	}
+	return v
+}
+
 // RequireCrossDomainAuth ensures sensitive operations only execute after successful cross-domain authentication.
 func RequireCrossDomainAuth(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		deviceDID := c.GetHeader("X-Device-DID")
-		targetDomain := c.GetHeader("X-Target-Domain")
+		deviceDID := HeaderDecoded(c, "X-Device-DID")
+		targetDomain := HeaderDecoded(c, "X-Target-Domain")
 		if deviceDID == "" || targetDomain == "" {
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"message": "missing X-Device-DID or X-Target-Domain"})
 			return

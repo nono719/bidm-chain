@@ -11,6 +11,7 @@ import Approvals from './pages/Approvals.vue'
 import TrustPolicies from './pages/TrustPolicies.vue'
 import SystemManage from './pages/SystemManage.vue'
 import Chain from './pages/Chain.vue'
+import RemoteConsole from './pages/RemoteConsole.vue'
 import Login from './pages/Login.vue'
 
 const router = createRouter({
@@ -27,7 +28,8 @@ const router = createRouter({
     { path: '/users', name: 'users', component: Users },
     { path: '/trust-policies', name: 'trustPolicies', component: TrustPolicies },
     { path: '/system/manage', name: 'systemManage', component: SystemManage },
-    { path: '/chain', name: 'chain', component: Chain }
+    { path: '/chain', name: 'chain', component: Chain },
+    { path: '/remote-console', name: 'remoteConsole', component: RemoteConsole }
   ]
 })
 

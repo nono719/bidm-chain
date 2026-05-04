@@ -24,6 +24,16 @@ const statusDetail = ref(null)
 
 const me = ref(getUser())
 const isAdmin = computed(() => me.value?.role === 'ADMIN')
+
+const tokenTtlText = computed(() => {
+  const exp = token.value?.expiresAt || receipt.value?.expiresAt || statusDetail.value?.expiresAt
+  if (!exp) return '约 30 分钟'
+  const diff = (new Date(exp) - new Date()) / 1000
+  if (diff <= 0) return '已过期'
+  const m = Math.floor(diff / 60)
+  const s = Math.floor(diff % 60)
+  return `${m} 分 ${s} 秒`
+})
 const deviceLoading = ref(false)
 const deviceOptions = ref([])
 const deviceMap = ref({})
@@ -328,7 +338,7 @@ async function runProtected() {
   try {
     const res = await apiRequest('/api/operations/protected', {
       method: 'POST',
-      headers: { 'X-Device-DID': form.deviceDid, 'X-Target-Domain': form.toDomainCode },
+      headers: { 'X-Device-DID': encodeURIComponent(form.deviceDid), 'X-Target-Domain': encodeURIComponent(form.toDomainCode) },
       body: {
         deviceDid: form.deviceDid,
         domainCode: form.toDomainCode,
@@ -668,6 +678,20 @@ onUnmounted(stopPolling)
           <a-button v-if="isAdmin && status === 'PENDING_APPROVAL'" danger @click="approveNow(false)">管理员拒绝</a-button>
           <a-button v-if="isAdmin && status === 'VERIFIED'" danger @click="revokeNow">撤销凭证</a-button>
         </a-space>
+
+        <a-alert
+          v-if="status === 'VERIFIED'"
+          type="success"
+          showIcon
+          style="margin-top: 12px"
+          :message="`AuthToken 已发放（剩余 ${tokenTtlText}），可凭此通行证读取目标域数据或执行操作`"
+        >
+          <template #action>
+            <a-button type="primary" size="middle" @click="$router.push({ path: '/remote-console', query: { deviceDid: form.deviceDid, targetDomain: form.toDomainCode } })">
+              进入远程运维台 →
+            </a-button>
+          </template>
+        </a-alert>
       </a-space>
     </a-card>
 

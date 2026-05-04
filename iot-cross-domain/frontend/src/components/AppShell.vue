@@ -28,6 +28,7 @@ const navItems = computed(() => {
     { key: '/devices/manage', label: '设备管理', icon: DatabaseOutlined },
     { key: '/trust-policies', label: '信任策略', icon: SafetyCertificateOutlined },
     { key: '/auth/cross-domain', label: '跨域认证', icon: SafetyCertificateOutlined },
+    { key: '/remote-console', label: '远程运维台', icon: DeploymentUnitOutlined },
     { key: '/monitor', label: '状态监控', icon: MonitorOutlined },
     { key: '/audit', label: '审计日志', icon: AuditOutlined },
     { key: '/chain', label: '联盟链浏览', icon: BlockOutlined }
