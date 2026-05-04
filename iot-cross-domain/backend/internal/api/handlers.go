@@ -20,7 +20,6 @@ import (
 	"iot-cross-domain/backend/internal/chain"
 	"iot-cross-domain/backend/internal/middleware"
 	"iot-cross-domain/backend/internal/model"
-	"iot-cross-domain/backend/internal/oracle"
 	"iot-cross-domain/backend/internal/pkgutil"
 	"iot-cross-domain/backend/pkg/response"
 
@@ -1055,69 +1054,11 @@ func (h *Handler) OracleReport(c *gin.Context) {
 		}
 	}
 
-	report := oracle.Simulate(deviceDID)
-	if report.Score >= 70 {
-		device.RuntimeState = "TRUSTED"
-	} else {
-		device.RuntimeState = "RISKY"
-	}
-	if err := h.DB.Save(&device).Error; err != nil {
-		response.InternalError(c, "update state failed")
-		return
-	}
-
-	digestRaw := fmt.Sprintf("%s|%t|%t|%t|%d", report.DeviceDID, report.Online, report.FirmwareValid, report.CertValid, report.Score)
-	sum := sha256.Sum256([]byte(digestRaw))
-	digest := hex.EncodeToString(sum[:])
-	anchor, err := h.Chain.Anchor("oracle_report", deviceDID, digest)
+	res, err := h.runOracleAggregation(deviceDID, 8) // 8% per-flag noise so most rounds reach unanimous majority
 	if err != nil {
-		_ = h.auditEx(model.AuditLog{
-			Module:     "oracle",
-			Action:     "anchor",
-			Operator:   c.GetString("username"),
-			Result:     "FAIL",
-			Contract:   "anchorcc",
-			Method:     "AnchorRecord",
-			SubjectDID: deviceDID,
-			Message:    err.Error(),
-			DetailJSON: mustJSON(gin.H{"digest": digest, "report": report}),
-		})
-		response.InternalError(c, "fabric anchor failed")
+		response.InternalError(c, err.Error())
 		return
 	}
-	_ = h.DB.Create(&model.ChainAnchor{
-		BizType:     "oracle_report",
-		BizRef:      deviceDID,
-		Digest:      digest,
-		TxHash:      anchor.TxHash,
-		BlockHeight: anchor.BlockHeight,
-	}).Error
-
-	severity := 0
-	msg := "OK"
-	if !report.Online {
-		severity = 2
-		msg = "设备离线"
-	} else if !report.FirmwareValid || !report.CertValid {
-		severity = 2
-		msg = "固件或证书校验失败"
-	} else if report.Score < 70 {
-		severity = 1
-		msg = "风险评分偏低"
-	}
-	update := model.DeviceStateUpdate{
-		DeviceDID:     report.DeviceDID,
-		Online:        report.Online,
-		FirmwareValid: report.FirmwareValid,
-		CertValid:     report.CertValid,
-		Score:         report.Score,
-		StateLabel:    device.RuntimeState,
-		Severity:      severity,
-		Message:       msg,
-		TxHash:        anchor.TxHash,
-		BlockHeight:   anchor.BlockHeight,
-	}
-	_ = h.DB.Create(&update).Error
 
 	_ = h.auditEx(model.AuditLog{
 		Module:      "oracle",
@@ -1127,13 +1068,30 @@ func (h *Handler) OracleReport(c *gin.Context) {
 		Contract:    "anchorcc",
 		Method:      "AnchorRecord",
 		SubjectDID:  deviceDID,
-		TxHash:      anchor.TxHash,
-		BlockHeight: anchor.BlockHeight,
-		GasUsed:     0,
-		Message:     msg,
-		DetailJSON:  mustJSON(gin.H{"state": device.RuntimeState, "report": report}),
+		TxHash:      res.Anchor.TxHash,
+		BlockHeight: res.Anchor.BlockHeight,
+		Message:     res.Message,
+		DetailJSON: mustJSON(gin.H{
+			"state":       res.State,
+			"aggregated":  res.Aggregated,
+			"threshold":   res.Threshold,
+			"submissions": res.Submissions,
+			"reached":     res.Reached,
+		}),
 	})
-	response.OK(c, gin.H{"state": device.RuntimeState, "report": report, "txHash": anchor.TxHash, "blockHeight": anchor.BlockHeight, "severity": severity, "message": msg})
+	response.OK(c, gin.H{
+		"state":       res.State,
+		"report":      res.Aggregated,
+		"txHash":      res.Anchor.TxHash,
+		"blockHeight": res.Anchor.BlockHeight,
+		"severity":    res.Severity,
+		"message":     res.Message,
+		"submissions": res.Submissions,
+		"threshold":   res.Threshold,
+		"participating": len(res.Submissions),
+		"reachedThreshold": res.Reached,
+		"aggregationId":   res.Update.ID,
+	})
 }
 
 func (h *Handler) OracleCheck(c *gin.Context) {

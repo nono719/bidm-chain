@@ -12,6 +12,7 @@ import TrustPolicies from './pages/TrustPolicies.vue'
 import SystemManage from './pages/SystemManage.vue'
 import Chain from './pages/Chain.vue'
 import RemoteConsole from './pages/RemoteConsole.vue'
+import Oracle from './pages/Oracle.vue'
 import Login from './pages/Login.vue'
 
 const router = createRouter({
@@ -29,6 +30,7 @@ const router = createRouter({
     { path: '/trust-policies', name: 'trustPolicies', component: TrustPolicies },
     { path: '/system/manage', name: 'systemManage', component: SystemManage },
     { path: '/chain', name: 'chain', component: Chain },
+    { path: '/oracle', name: 'oracle', component: Oracle },
     { path: '/remote-console', name: 'remoteConsole', component: RemoteConsole }
   ]
 })

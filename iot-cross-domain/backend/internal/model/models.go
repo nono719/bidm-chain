@@ -91,17 +91,34 @@ type SystemSetting struct {
 }
 
 type DeviceStateUpdate struct {
+	ID                 uint      `gorm:"primaryKey" json:"id"`
+	DeviceDID          string    `gorm:"size:128;index;not null" json:"deviceDid"`
+	Online             bool      `json:"online"`
+	FirmwareValid      bool      `json:"firmwareValid"`
+	CertValid          bool      `json:"certValid"`
+	Score              int       `json:"score"`
+	StateLabel         string    `gorm:"size:64;index;not null" json:"stateLabel"`
+	Severity           int       `gorm:"index;not null" json:"severity"`
+	Message            string    `gorm:"size:255;not null" json:"message"`
+	TxHash             string    `gorm:"size:128" json:"txHash"`
+	BlockHeight        uint64    `json:"blockHeight"`
+	ParticipatingNodes int       `gorm:"not null;default:0" json:"participatingNodes"`
+	ThresholdAtAgg     int       `gorm:"not null;default:0" json:"thresholdAtAgg"`
+	CreatedAt          time.Time `json:"createdAt"`
+}
+
+type OracleSubmission struct {
 	ID            uint      `gorm:"primaryKey" json:"id"`
+	AggregationID uint      `gorm:"index;not null" json:"aggregationId"`
 	DeviceDID     string    `gorm:"size:128;index;not null" json:"deviceDid"`
+	NodeID        uint      `gorm:"index" json:"nodeId"`
+	NodeName      string    `gorm:"size:64;not null" json:"nodeName"`
 	Online        bool      `json:"online"`
 	FirmwareValid bool      `json:"firmwareValid"`
 	CertValid     bool      `json:"certValid"`
 	Score         int       `json:"score"`
-	StateLabel    string    `gorm:"size:64;index;not null" json:"stateLabel"`
-	Severity      int       `gorm:"index;not null" json:"severity"`
-	Message       string    `gorm:"size:255;not null" json:"message"`
-	TxHash        string    `gorm:"size:128" json:"txHash"`
-	BlockHeight   uint64    `json:"blockHeight"`
+	Signature     string    `gorm:"size:255;not null;default:''" json:"signature"`
+	InMajority    bool      `gorm:"not null;default:true" json:"inMajority"`
 	CreatedAt     time.Time `json:"createdAt"`
 }
 

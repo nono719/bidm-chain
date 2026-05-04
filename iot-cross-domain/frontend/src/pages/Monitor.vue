@@ -17,6 +17,27 @@ const alerts = ref([])
 const filters = reactive({ domain: 'ALL', state: 'ALL', type: 'ALL' })
 const selectedDevice = ref(null)
 
+const oracleSlice = ref([])
+const oracleSliceLoading = ref(false)
+
+async function loadOracleSlice(deviceDid) {
+  if (!deviceDid) {
+    oracleSlice.value = []
+    return
+  }
+  oracleSliceLoading.value = true
+  try {
+    const res = await apiRequest(`/api/oracle/aggregations?limit=10&deviceDid=${encodeURIComponent(deviceDid)}`)
+    if (res.code === 0) oracleSlice.value = res.data || []
+  } finally {
+    oracleSliceLoading.value = false
+  }
+}
+
+watch(() => selectedDevice.value?.deviceDid, (did) => {
+  loadOracleSlice(did)
+})
+
 function shortDid(v) {
   if (!v) return '-'
   if (v.length <= 22) return v
@@ -299,6 +320,46 @@ function setSelected(record) {
           <a-descriptions-item label="区块高度">{{ selectedDevice?.lastReport?.blockHeight ?? '-' }}</a-descriptions-item>
           <a-descriptions-item label="交易哈希"><span class="mono">{{ selectedDevice?.lastReport?.txHash || '-' }}</span></a-descriptions-item>
         </a-descriptions>
+
+        <a-card title="预言机聚合历史（最近 10 笔）" size="small" :loading="oracleSliceLoading">
+          <a-empty v-if="!oracleSlice.length" description="该设备暂无聚合记录" />
+          <a-table
+            v-else
+            :columns="[
+              { title: '#', dataIndex: 'id', width: 50 },
+              { title: '参与/门限', key: 'part', width: 100 },
+              { title: '一致', key: 'cons', width: 80 },
+              { title: '状态', dataIndex: 'stateLabel', width: 80 },
+              { title: '分', dataIndex: 'score', width: 50 },
+              { title: '区块', dataIndex: 'blockHeight', width: 70 },
+              { title: '时间', dataIndex: 'createdAt' }
+            ]"
+            :dataSource="oracleSlice"
+            size="small"
+            :pagination="false"
+            rowKey="id"
+            :scroll="{ x: 480 }"
+          >
+            <template #bodyCell="{ column, record }">
+              <template v-if="column.key === 'part'">
+                <span class="mono">{{ record.participatingNodes }}/{{ record.thresholdAtAgg }}</span>
+              </template>
+              <template v-else-if="column.key === 'cons'">
+                <a-tag :color="record.submissionsInMaj === record.submissionsTotal ? 'green' : 'orange'" v-if="record.submissionsTotal">
+                  {{ record.submissionsInMaj }}/{{ record.submissionsTotal }}
+                </a-tag>
+              </template>
+              <template v-else-if="column.dataIndex === 'stateLabel'">
+                <a-tag :color="record.stateLabel === 'TRUSTED' ? 'green' : 'orange'">{{ record.stateLabel }}</a-tag>
+              </template>
+              <template v-else-if="column.dataIndex === 'blockHeight'">
+                <span v-if="record.blockHeight" class="mono">#{{ record.blockHeight }}</span>
+                <span v-else style="color: #94a3b8">-</span>
+              </template>
+              <template v-else-if="column.dataIndex === 'createdAt'">{{ fmt(record.createdAt) }}</template>
+            </template>
+          </a-table>
+        </a-card>
       </a-space>
     </a-drawer>
   </a-card>

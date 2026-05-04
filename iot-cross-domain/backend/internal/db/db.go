@@ -23,6 +23,7 @@ func Open(mysqlDSN string) (*gorm.DB, error) {
 		&model.AuditLog{},
 		&model.DomainTrustPolicy{},
 		&model.OracleNode{},
+		&model.OracleSubmission{},
 		&model.SystemSetting{},
 	); err != nil {
 		return nil, err

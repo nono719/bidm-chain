@@ -31,7 +31,8 @@ const navItems = computed(() => {
     { key: '/remote-console', label: '远程运维台', icon: DeploymentUnitOutlined },
     { key: '/monitor', label: '状态监控', icon: MonitorOutlined },
     { key: '/audit', label: '审计日志', icon: AuditOutlined },
-    { key: '/chain', label: '联盟链浏览', icon: BlockOutlined }
+    { key: '/chain', label: '联盟链浏览', icon: BlockOutlined },
+    { key: '/oracle', label: '预言机控制中心', icon: MonitorOutlined }
   ]
   if (!currentUser.value?.role) {
     return base.filter((i) => i.key !== '/trust-policies')
