@@ -111,6 +111,10 @@ func main() {
 		auth.GET("/chain/blocks", h.ChainBlocks)
 		auth.GET("/chain/blocks/:num", h.ChainBlockDetail)
 		auth.POST("/chain/verify", h.ChainVerify)
+		auth.GET("/chain/hashchain", h.ChainHashChain)
+		auth.GET("/chain/demo/status", h.ChainDemoStatus)
+		auth.POST("/chain/demo/tamper", h.ChainDemoTamper)
+		auth.POST("/chain/demo/restore", h.ChainDemoRestore)
 		auth.GET("/operations/catalog", h.ListOperationCatalog)
 		auth.GET("/operations/history", h.ListOperationHistory)
 

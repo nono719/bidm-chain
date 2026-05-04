@@ -20,6 +20,15 @@ const blockDetailVisible = ref(false)
 const blockDetail = ref(null)
 const blockDetailLoading = ref(false)
 
+const hashChain = ref([])
+const loadingHashChain = ref(false)
+
+const tamperState = ref({ tamperedCount: 0, items: [] })
+const tamperLoading = ref(false)
+const tamperSelectedAnchorId = ref(null)
+const tamperBizRef = ref('')
+const isAdmin = ref(false)
+
 const chartRef = ref(null)
 let chart = null
 let timer = null
@@ -56,8 +65,75 @@ async function loadBlocks() {
   }
 }
 
+async function loadHashChain() {
+  loadingHashChain.value = true
+  try {
+    const res = await apiRequest('/api/chain/hashchain?limit=8')
+    if (res.code === 0) hashChain.value = res.data?.blocks || []
+  } finally {
+    loadingHashChain.value = false
+  }
+}
+
+async function loadTamperStatus() {
+  if (!isAdmin.value) return
+  const res = await apiRequest('/api/chain/demo/status')
+  if (res.code === 0) tamperState.value = res.data
+}
+
 async function refreshAll() {
-  await Promise.all([loadInfo(), loadTopology(), loadBlocks()])
+  await Promise.all([loadInfo(), loadTopology(), loadBlocks(), loadHashChain(), loadTamperStatus()])
+}
+
+async function detectRole() {
+  const res = await apiRequest('/api/auth/me')
+  if (res.code === 0) isAdmin.value = res.data?.role === 'ADMIN'
+}
+
+async function tamperAnchor() {
+  if (!tamperSelectedAnchorId.value) {
+    antdMessage.warning('请输入要篡改的 anchorId')
+    return
+  }
+  tamperLoading.value = true
+  try {
+    const res = await apiRequest('/api/chain/demo/tamper', { method: 'POST', body: { anchorId: Number(tamperSelectedAnchorId.value) } })
+    if (res.code === 0) {
+      antdMessage.warning('已模拟篡改数据库，请用 BizRef 模式触发链上读验证查看结果')
+      tamperBizRef.value = ''
+      await Promise.all([loadTamperStatus(), loadBlocks()])
+      // Auto-verify by anchor's bizRef if we can find it
+      const anchor = blocks.value.flatMap((b) => b.anchors || []).find((a) => a.id === Number(tamperSelectedAnchorId.value))
+      if (anchor) {
+        verifyForm.value = { mode: 'biz', value: anchor.bizRef }
+        await runVerify()
+      }
+    } else {
+      antdMessage.error(res.message || '篡改失败')
+    }
+  } finally {
+    tamperLoading.value = false
+  }
+}
+
+async function restoreAnchor(anchorId) {
+  tamperLoading.value = true
+  try {
+    const res = await apiRequest('/api/chain/demo/restore', { method: 'POST', body: { anchorId: Number(anchorId) } })
+    if (res.code === 0) {
+      antdMessage.success('已恢复，再次 verify 应显示一致')
+      await Promise.all([loadTamperStatus(), loadBlocks()])
+      const anchor = blocks.value.flatMap((b) => b.anchors || []).find((a) => a.id === Number(anchorId))
+      if (anchor) {
+        verifyForm.value = { mode: 'biz', value: anchor.bizRef }
+        await runVerify()
+      }
+    } else {
+      antdMessage.error(res.message || '恢复失败')
+    }
+  } finally {
+    tamperLoading.value = false
+  }
 }
 
 function renderTopology() {
@@ -233,6 +309,7 @@ const onlineRatio = computed(() => {
 })
 
 onMounted(async () => {
+  await detectRole()
   await refreshAll()
   timer = setInterval(refreshAll, 12000)
   window.addEventListener('resize', resizeChart)
@@ -302,6 +379,32 @@ function resizeChart() {
       </div>
     </a-card>
 
+    <a-card title="区块哈希链（每块的 PreviousHash 指向前一块的 DataHash，构成不可断链）" class="panel-card">
+      <template #extra>
+        <a-tag color="purple">{{ hashChain.length }} 个最新区块</a-tag>
+      </template>
+      <a-spin :spinning="loadingHashChain && !hashChain.length">
+        <div class="hashchain-strip">
+          <template v-for="(b, i) in hashChain" :key="b.number">
+            <div class="hashchain-block">
+              <div class="hashchain-num">#{{ b.number }}</div>
+              <div class="hashchain-tx">{{ b.txCount }} tx</div>
+              <div class="hashchain-row">
+                <span class="hashchain-label">DataHash</span>
+                <span class="hashchain-hash mono">{{ shortHash(b.dataHash) }}</span>
+              </div>
+              <div class="hashchain-row">
+                <span class="hashchain-label">PrevHash</span>
+                <span class="hashchain-hash mono prev">{{ shortHash(b.previousHash) }}</span>
+              </div>
+            </div>
+            <div v-if="i < hashChain.length - 1" class="hashchain-arrow" :title="'PrevHash 指向 #' + hashChain[i+1].number">←</div>
+          </template>
+          <div v-if="!hashChain.length && !loadingHashChain" class="hashchain-empty">暂无区块</div>
+        </div>
+      </a-spin>
+    </a-card>
+
     <a-row :gutter="16">
       <a-col :xs="24" :lg="14">
         <a-card title="区块列表（按 BlockHeight 倒序，含每块的业务锚定）" :loading="loadingBlocks" class="panel-card">
@@ -315,7 +418,7 @@ function resizeChart() {
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'biz'">
                 <a-space wrap size="small">
-                  <a-tag v-for="(a, idx) in record.anchors" :key="idx" :color="bizColor(a.bizType)">{{ a.bizType }}</a-tag>
+                  <a-tag v-for="(a, idx) in record.anchors" :key="idx" :color="bizColor(a.bizType)" style="cursor:pointer" :title="'anchorId=' + a.id" @click="isAdmin && (tamperSelectedAnchorId = a.id)">{{ a.bizType }} #{{ a.id }}</a-tag>
                 </a-space>
               </template>
               <template v-else-if="column.key === 'firstAt'">{{ fmtTime(record.firstAt) }}</template>
@@ -355,7 +458,7 @@ function resizeChart() {
           <div v-else>
             <a-alert
               :type="verifyResult.consistent ? 'success' : 'error'"
-              :message="verifyResult.consistent ? '✓ 一致：数据库副本与链上记录吻合' : (verifyResult.found ? '✗ 不一致：链上记录与数据库不匹配' : '未找到对应锚定记录')"
+              :message="verifyResult.consistent ? '✓ 一致：数据库副本与链上记录吻合' : (verifyResult.found ? '✗ 不一致：链上记录与数据库不匹配（链上为准）' : '未找到对应锚定记录')"
               showIcon
               style="margin-bottom: 10px"
             />
@@ -370,10 +473,77 @@ function resizeChart() {
                 <a-tag :color="verifyResult.chainTx.valid ? 'green' : 'red'">{{ verifyResult.chainTx.validationMessage }}</a-tag>
                 <span style="margin-left:6px">code={{ verifyResult.chainTx.validationCode }}</span>
               </a-descriptions-item>
+              <a-descriptions-item label="DB digest">
+                <span class="mono" :style="verifyResult.digestMatch ? '' : 'color:#dc2626;font-weight:600'">{{ verifyResult.digestInDB || '-' }}</span>
+              </a-descriptions-item>
+              <a-descriptions-item label="链上 digest">
+                <span class="mono" :style="verifyResult.digestMatch ? 'color:#16a34a' : 'color:#16a34a;font-weight:600'">{{ verifyResult.digestOnChain || '-' }}</span>
+              </a-descriptions-item>
               <a-descriptions-item v-if="verifyResult.chainError" label="链上读错误">
                 <span style="color:#dc2626">{{ verifyResult.chainError }}</span>
               </a-descriptions-item>
             </a-descriptions>
+
+            <div v-if="verifyResult.chainTx?.endorsers?.length" style="margin-top: 12px">
+              <div class="section-title">多组织背书 <a-tag color="purple" style="margin-left:6px">{{ verifyResult.chainTx.endorsers.length }} 个 Org 共同签名</a-tag></div>
+              <div class="endorser-list">
+                <div v-for="(e, i) in verifyResult.chainTx.endorsers" :key="i" class="endorser-item">
+                  <div class="endorser-msp">
+                    <a-tag :color="e.mspId === 'Org1MSP' ? 'green' : (e.mspId === 'Org2MSP' ? 'cyan' : 'blue')">{{ e.mspId }}</a-tag>
+                    <span class="endorser-cn">{{ e.commonName || '(unknown)' }}</span>
+                  </div>
+                  <div class="endorser-meta">
+                    <span class="endorser-meta-item">CA: {{ e.issuer || '-' }}</span>
+                    <span class="endorser-meta-item">证书序列号: {{ e.serial?.slice(0, 12) }}…</span>
+                  </div>
+                  <div class="endorser-sig mono">签名: {{ e.sigShort || '-' }}</div>
+                </div>
+              </div>
+              <div v-if="verifyResult.chainTx.creator" class="creator-info">
+                提案发起者: <a-tag color="blue">{{ verifyResult.chainTx.creator.mspId }}</a-tag>
+                <span class="mono" style="margin-left:4px">{{ verifyResult.chainTx.creator.commonName }}</span>
+              </div>
+            </div>
+          </div>
+        </a-card>
+
+        <a-card v-if="isAdmin" title="🧪 篡改对比演示（证明链上不可篡改）" class="panel-card" style="margin-top: 16px">
+          <a-alert
+            type="warning"
+            showIcon
+            style="margin-bottom: 12px"
+            :message="`已篡改 anchor 数：${tamperState.tamperedCount}（仅修改数据库，链上不动）`"
+          />
+          <div class="tamper-help">
+            选择一个区块列表中的 anchorId（左侧表格"查看"里能看到 ID），点"模拟篡改"会偷偷把数据库 digest 改掉，链上不变；然后自动 verify 显示"✗ 不一致"。再点"恢复"还原。
+          </div>
+          <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap">
+            <a-input-number v-model:value="tamperSelectedAnchorId" placeholder="anchorId" style="width: 130px" :min="1" />
+            <a-button danger :loading="tamperLoading" @click="tamperAnchor">模拟篡改数据库</a-button>
+          </div>
+          <a-divider v-if="tamperState.items?.length" style="margin: 12px 0" />
+          <div v-if="tamperState.items?.length">
+            <div class="section-title">当前已被篡改的记录</div>
+            <a-table
+              size="small"
+              :pagination="false"
+              :dataSource="tamperState.items"
+              :columns="[
+                { title: 'AnchorID', dataIndex: 'anchorId', width: 90 },
+                { title: '原 digest', dataIndex: 'originalDigest', ellipsis: true },
+                { title: '操作', key: 'op', width: 90 }
+              ]"
+              rowKey="anchorId"
+            >
+              <template #bodyCell="{ column, record }">
+                <template v-if="column.dataIndex === 'originalDigest'">
+                  <span class="mono">{{ shortHash(record.originalDigest) }}</span>
+                </template>
+                <template v-else-if="column.key === 'op'">
+                  <a-button type="link" size="small" :loading="tamperLoading" @click="restoreAnchor(record.anchorId)">恢复</a-button>
+                </template>
+              </template>
+            </a-table>
           </div>
         </a-card>
       </a-col>
@@ -466,5 +636,139 @@ function resizeChart() {
   font-family: var(--mono);
   color: #344054;
   word-break: break-all;
+}
+
+.section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f2937;
+  margin: 4px 0 8px;
+}
+
+.endorser-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.endorser-item {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: linear-gradient(180deg, #fafbff 0%, #f3f5fb 100%);
+}
+
+.endorser-msp {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.endorser-cn {
+  font-size: 13px;
+  color: #1e293b;
+  font-weight: 500;
+}
+
+.endorser-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+.endorser-sig {
+  font-size: 11px;
+  color: #475569;
+  margin-top: 2px;
+}
+
+.creator-info {
+  margin-top: 10px;
+  padding: 6px 8px;
+  background: #eef2ff;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.tamper-help {
+  font-size: 12px;
+  color: #475569;
+  background: #fff7ed;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border-left: 3px solid #f59e0b;
+  line-height: 1.6;
+}
+
+.hashchain-strip {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 4px 2px 12px;
+}
+
+.hashchain-block {
+  flex-shrink: 0;
+  width: 168px;
+  border: 1px solid #c7d2fe;
+  border-radius: 10px;
+  padding: 10px;
+  background: linear-gradient(180deg, #eef2ff 0%, #f5f3ff 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.hashchain-num {
+  font-size: 16px;
+  font-weight: 700;
+  color: #182078;
+}
+
+.hashchain-tx {
+  font-size: 11px;
+  color: #475569;
+  margin-top: -2px;
+}
+
+.hashchain-row {
+  display: flex;
+  flex-direction: column;
+  margin-top: 4px;
+}
+
+.hashchain-label {
+  font-size: 10px;
+  color: #64748b;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.hashchain-hash {
+  font-size: 11px;
+  color: #1f2937;
+}
+
+.hashchain-hash.prev {
+  color: #7c3aed;
+}
+
+.hashchain-arrow {
+  display: flex;
+  align-items: center;
+  font-size: 22px;
+  color: #7c3aed;
+  font-weight: 700;
+  user-select: none;
+}
+
+.hashchain-empty {
+  padding: 20px;
+  color: #94a3b8;
+  text-align: center;
+  width: 100%;
 }
 </style>

@@ -3,6 +3,7 @@ package chain
 import (
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -42,11 +43,16 @@ type BlockSummary struct {
 }
 
 type TxDetail struct {
-	TxID              string `json:"txId"`
-	ValidationCode    int32  `json:"validationCode"`
-	ValidationMessage string `json:"validationMessage"`
-	Valid             bool   `json:"valid"`
-	BlockHeight       uint64 `json:"blockHeight,omitempty"`
+	TxID              string         `json:"txId"`
+	ValidationCode    int32          `json:"validationCode"`
+	ValidationMessage string         `json:"validationMessage"`
+	Valid             bool           `json:"valid"`
+	BlockHeight       uint64         `json:"blockHeight,omitempty"`
+	HeaderType        string         `json:"headerType,omitempty"`
+	ChannelID         string         `json:"channelId,omitempty"`
+	TimestampMs       int64          `json:"timestampMs,omitempty"`
+	Creator           *EndorserInfo  `json:"creator,omitempty"`
+	Endorsers         []EndorserInfo `json:"endorsers,omitempty"`
 }
 
 type Service interface {
@@ -54,7 +60,16 @@ type Service interface {
 	ChainInfo() (*ChainInfo, error)
 	BlockByNumber(num uint64) (*BlockSummary, error)
 	TransactionByID(txID string) (*TxDetail, error)
+	QueryAnchor(bizType string, bizRef string) (*AnchoredRecord, error)
 	ChannelName() string
+}
+
+type AnchoredRecord struct {
+	BizType   string `json:"bizType"`
+	BizRef    string `json:"bizRef"`
+	Digest    string `json:"digest"`
+	Timestamp string `json:"timestamp"`
+	CreatedAt string `json:"createdAt"`
 }
 
 type FabricGatewayService struct {
@@ -252,12 +267,38 @@ func (s *FabricGatewayService) TransactionByID(txID string) (*TxDetail, error) {
 	if name == "" {
 		name = fmt.Sprintf("UNKNOWN(%d)", code)
 	}
-	return &TxDetail{
+	out := &TxDetail{
 		TxID:              txID,
 		ValidationCode:    code,
 		ValidationMessage: name,
 		Valid:             code == int32(peerpb.TxValidationCode_VALID),
-	}, nil
+	}
+	if parsed, err := parseEndorsements(pt.TransactionEnvelope); err == nil && parsed != nil {
+		out.ChannelID = parsed.ChannelID
+		out.HeaderType = parsed.HeaderType
+		out.TimestampMs = parsed.TimestampMs
+		out.Creator = parsed.Creator
+		out.Endorsers = parsed.Endorsers
+		if parsed.TxID != "" {
+			out.TxID = parsed.TxID
+		}
+	}
+	return out, nil
+}
+
+func (s *FabricGatewayService) QueryAnchor(bizType string, bizRef string) (*AnchoredRecord, error) {
+	if s.contract == nil {
+		return nil, errors.New("anchor contract not initialized")
+	}
+	result, err := s.contract.EvaluateTransaction("QueryAnchor", bizType, bizRef)
+	if err != nil {
+		return nil, err
+	}
+	rec := &AnchoredRecord{}
+	if err := json.Unmarshal(result, rec); err != nil {
+		return nil, fmt.Errorf("decode AnchorRecord: %w", err)
+	}
+	return rec, nil
 }
 
 func (s *FabricGatewayService) Close() error {
