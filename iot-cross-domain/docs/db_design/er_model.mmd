@@ -1,0 +1,158 @@
+erDiagram
+    DOMAIN ||--o{ USER : "code->domain_code"
+    DOMAIN ||--o{ DEVICE : "code->domain_code"
+    DOMAIN ||--o{ CROSS_DOMAIN_AUTH_SESSION : "code->from_domain_code"
+    DOMAIN ||--o{ CROSS_DOMAIN_AUTH_SESSION : "code->to_domain_code"
+    DOMAIN ||--o{ DOMAIN_TRUST_POLICY : "code->from_domain_code"
+    DOMAIN ||--o{ DOMAIN_TRUST_POLICY : "code->to_domain_code"
+
+    DEVICE ||--o{ CROSS_DOMAIN_AUTH_SESSION : "device_did"
+    DEVICE ||--o{ DEVICE_STATE_UPDATE : "device_did"
+    DEVICE ||--o{ PROTECTED_OPERATION : "device_did"
+    DEVICE ||--o{ AUDIT_LOG : "subject_did"
+    DEVICE ||--o{ CHAIN_ANCHOR : "biz_ref(oracle_report)"
+
+    USER ||--o{ PROTECTED_OPERATION : "username->created_by"
+    USER ||--o{ AUDIT_LOG : "username->operator"
+    USER ||--o{ CROSS_DOMAIN_AUTH_SESSION : "username->requested_by"
+
+    DOMAIN {
+      uint id PK
+      string code
+      string name
+      datetime created_at
+    }
+
+    USER {
+      uint id PK
+      string username
+      string password_hash
+      string display_name
+      string role
+      string domain_code
+      datetime created_at
+    }
+
+    DEVICE {
+      uint id PK
+      string device_did
+      string domain_code
+      string display_name
+      string credential
+      string device_type
+      text public_key_jwk
+      text metadata_json
+      string lifecycle
+      string runtime_state
+      datetime created_at
+      datetime updated_at
+    }
+
+    CROSS_DOMAIN_AUTH_SESSION {
+      uint id PK
+      string request_id
+      string device_did
+      string from_domain_code
+      string to_domain_code
+      string resource
+      string permission
+      int ttl_seconds
+      string challenge
+      string status
+      string requested_by
+      datetime signature_verified_at
+      datetime verified_at
+      datetime expires_at
+      string approved_by
+      datetime approved_at
+      string revoked_by
+      datetime revoked_at
+      string revoke_reason
+      text token_json
+      datetime created_at
+    }
+
+    DOMAIN_TRUST_POLICY {
+      uint id PK
+      string from_domain_code
+      string to_domain_code
+      string policy_level
+      string allowed_perms
+      string allowed_res
+      bool enabled
+      string updated_by
+      datetime created_at
+      datetime updated_at
+    }
+
+    ORACLE_NODE {
+      uint id PK
+      string node_name
+      string public_key
+      string status
+      datetime last_seen
+      datetime created_at
+      datetime updated_at
+    }
+
+    SYSTEM_SETTING {
+      uint id PK
+      string conf_key
+      string conf_value
+      string updated_by
+      datetime updated_at
+      datetime created_at
+    }
+
+    DEVICE_STATE_UPDATE {
+      uint id PK
+      string device_did
+      bool online
+      bool firmware_valid
+      bool cert_valid
+      int score
+      string state_label
+      int severity
+      string message
+      string tx_hash
+      uint64 block_height
+      datetime created_at
+    }
+
+    PROTECTED_OPERATION {
+      uint id PK
+      string device_did
+      string domain_code
+      string operation
+      text payload
+      string created_by
+      datetime created_at
+    }
+
+    CHAIN_ANCHOR {
+      uint id PK
+      string biz_type
+      string biz_ref
+      string digest
+      string tx_hash
+      uint64 block_height
+      datetime created_at
+    }
+
+    AUDIT_LOG {
+      uint id PK
+      string module
+      string action
+      string operator
+      string result
+      string contract
+      string method
+      string from
+      string subject_did
+      string tx_hash
+      uint64 block_height
+      uint64 gas_used
+      string message
+      text detail_json
+      datetime occurred_at
+    }

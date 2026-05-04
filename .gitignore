@@ -1,0 +1,82 @@
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Editors / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.trae/
+.run/
+**/.run/
+
+# Logs
+*.log
+logs/
+log.txt
+
+# Node
+node_modules/
+**/node_modules/
+.npm/
+.pnpm-store/
+
+# Frontend build output
+dist/
+**/dist/
+.vite/
+**/.vite/
+build/
+.cache/
+
+# Go build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+backend/bin/
+**/tmp/
+
+# Compiled chaincode binary (rebuild with go build)
+iot-cross-domain/fabric/chaincode/anchor-go/anchor-go
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets/
+**/keystore/
+
+# Hyperledger Fabric — official samples (third-party, multi-MB binaries)
+fabric-samples/
+
+# Thesis materials (kept outside the code repo)
+thesis_work/
+docx_extract/
+*.pdf
+*.doc
+*.docx
+开题报告*.doc
+陈铭刚-*.docx
+2021131104-*.pdf
+附件2-*.docx
+
+# Large source archives
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+
+# Database files
+*.sqlite
+*.sqlite3
+*.db
+
+# Claude / agent local config
+.claude/
