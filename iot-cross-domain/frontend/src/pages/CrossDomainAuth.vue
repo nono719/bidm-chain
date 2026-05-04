@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { message as antdMessage } from 'ant-design-vue'
 import dayjs from 'dayjs'
 import { apiRequest, getUser } from '../api/client'
@@ -525,9 +526,69 @@ onMounted(loadHistory)
 onMounted(loadDomains)
 watch(() => [requestId.value, status.value], syncPolling, { immediate: true })
 onUnmounted(stopPolling)
+
+// =========================================================
+// My active tokens — show all sessions and let user re-enter
+// the remote-console for any still-valid VERIFIED token.
+// =========================================================
+const router = useRouter()
+const tokensList = ref([])
+const tokensLoading = ref(false)
+const nowTick = ref(Date.now())
+let tokensRefreshTimer = null
+let nowTickTimer = null
+
+async function loadTokens() {
+  tokensLoading.value = true
+  try {
+    const res = await apiRequest('/api/cross/history')
+    if (res.code === 0) {
+      tokensList.value = (res.data || []).filter((s) => s.status === 'VERIFIED' || s.status === 'REVOKED')
+    }
+  } finally {
+    tokensLoading.value = false
+  }
+}
+
+function tokenStatus(s) {
+  if (s.status === 'REVOKED') return { code: 'REVOKED', label: '已撤销', color: 'red' }
+  if (s.status === 'VERIFIED') {
+    const exp = s.expiresAt
+    if (exp && new Date(exp).getTime() <= nowTick.value) return { code: 'EXPIRED', label: '已过期', color: 'orange' }
+    return { code: 'ACTIVE', label: '活跃中', color: 'green' }
+  }
+  return { code: s.status, label: s.status, color: 'default' }
+}
+
+function tokenTtl(s) {
+  if (!s.expiresAt) return '-'
+  const diff = (new Date(s.expiresAt).getTime() - nowTick.value) / 1000
+  if (diff <= 0) return '00:00'
+  const m = Math.floor(diff / 60)
+  const sec = Math.floor(diff % 60)
+  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+}
+
+function enterRemoteConsole(s) {
+  router.push({ path: '/remote-console', query: { deviceDid: s.deviceDid, targetDomain: s.toDomainCode } })
+}
+
+onMounted(() => {
+  loadTokens()
+  tokensRefreshTimer = setInterval(loadTokens, 15000)
+  nowTickTimer = setInterval(() => {
+    nowTick.value = Date.now()
+  }, 1000)
+})
+
+onUnmounted(() => {
+  if (tokensRefreshTimer) clearInterval(tokensRefreshTimer)
+  if (nowTickTimer) clearInterval(nowTickTimer)
+})
 </script>
 
 <template>
+  <a-space direction="vertical" size="middle" style="width: 100%">
   <a-card class="panel-card" title="跨域认证（图5-3）">
     <a-row :gutter="16">
       <a-col :xs="24" :lg="10">
@@ -758,6 +819,67 @@ onUnmounted(stopPolling)
       </a-col>
     </a-row>
   </a-card>
+
+  <a-card class="panel-card" title="我的跨域凭证（VERIFIED 且未过期可直接进入运维台）">
+    <template #extra>
+      <a-button type="link" size="small" :loading="tokensLoading" @click="loadTokens">刷新</a-button>
+    </template>
+    <a-alert
+      type="info"
+      showIcon
+      style="margin-bottom: 10px"
+      message="该列表展示您发起过的跨域认证凭证。状态「活跃中」表示 token 在有效期内，可直接进入远程运维台执行读 / 写操作；状态「已过期」需重新发起认证；状态「已撤销」不可再用。"
+    />
+    <a-table
+      :columns="[
+        { title: '设备 DID', dataIndex: 'deviceDid', width: 240 },
+        { title: '源 → 目标', key: 'route', width: 160 },
+        { title: '资源 / 权限', key: 'rp', width: 130 },
+        { title: '状态', key: 'st', width: 100 },
+        { title: '剩余 TTL', key: 'ttl', width: 100 },
+        { title: '过期时间', dataIndex: 'expiresAt', key: 'exp', width: 170 },
+        { title: '操作', key: 'op', width: 200 }
+      ]"
+      :dataSource="tokensList"
+      :pagination="{ pageSize: 5 }"
+      size="small"
+      rowKey="id"
+    >
+      <template #bodyCell="{ column, record }">
+        <template v-if="column.dataIndex === 'deviceDid'">
+          <span class="mono">{{ record.deviceDid }}</span>
+        </template>
+        <template v-else-if="column.key === 'route'">
+          <a-tag color="geekblue">{{ record.fromDomainCode }}</a-tag>
+          <span style="margin: 0 4px">→</span>
+          <a-tag color="cyan">{{ record.toDomainCode }}</a-tag>
+        </template>
+        <template v-else-if="column.key === 'rp'">
+          <a-tag color="blue">{{ record.permission || '-' }}</a-tag>
+          <a-tag color="purple">{{ record.resource || '*' }}</a-tag>
+        </template>
+        <template v-else-if="column.key === 'st'">
+          <a-tag :color="tokenStatus(record).color">{{ tokenStatus(record).label }}</a-tag>
+        </template>
+        <template v-else-if="column.key === 'ttl'">
+          <span class="mono" :style="tokenStatus(record).code === 'ACTIVE' ? 'color:#16a34a;font-weight:600' : 'color:#94a3b8'">{{ tokenTtl(record) }}</span>
+        </template>
+        <template v-else-if="column.key === 'exp'">
+          <span style="font-size: 12px; color: #475569">{{ record.expiresAt ? fmt(record.expiresAt) : '-' }}</span>
+        </template>
+        <template v-else-if="column.key === 'op'">
+          <a-button
+            v-if="tokenStatus(record).code === 'ACTIVE'"
+            type="primary"
+            size="small"
+            @click="enterRemoteConsole(record)"
+          >进入运维台 →</a-button>
+          <span v-else style="color: #94a3b8; font-size: 12px">不可用</span>
+        </template>
+      </template>
+    </a-table>
+  </a-card>
+  </a-space>
 </template>
 
 <style scoped>

@@ -47,8 +47,8 @@ type CrossDomainAuthSession struct {
 	Status              string     `gorm:"size:32;index;not null" json:"status"`
 	RequestedBy         string     `gorm:"size:64;not null;default:''" json:"requestedBy"`
 	SignatureVerifiedAt *time.Time `json:"signatureVerifiedAt"`
-	VerifiedAt          *time.Time
-	ExpiresAt           *time.Time
+	VerifiedAt          *time.Time `json:"verifiedAt"`
+	ExpiresAt           *time.Time `json:"expiresAt"`
 	ApprovedBy          string     `gorm:"size:64;not null;default:''" json:"approvedBy"`
 	ApprovedAt          *time.Time `json:"approvedAt"`
 	RevokedBy           string     `gorm:"size:64;not null;default:''" json:"revokedBy"`

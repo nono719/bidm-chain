@@ -23,6 +23,33 @@ const targetDomain = ref(route.query.targetDomain || '')
 
 const session = ref(null)
 const sessionLoading = ref(false)
+
+const sessionPicker = ref({ visible: false, options: [] })
+
+async function autoPickFromHistory() {
+  const res = await apiRequest('/api/cross/history')
+  if (res.code !== 0) return false
+  const items = (res.data || []).filter((s) => s.status === 'VERIFIED' && s.expiresAt && new Date(s.expiresAt).getTime() > Date.now())
+  if (items.length === 0) return false
+  if (items.length === 1) {
+    deviceDid.value = items[0].deviceDid
+    targetDomain.value = items[0].toDomainCode
+    return true
+  }
+  sessionPicker.value = { visible: true, options: items }
+  return false
+}
+
+function chooseSessionFromPicker(s) {
+  deviceDid.value = s.deviceDid
+  targetDomain.value = s.toDomainCode
+  sessionPicker.value.visible = false
+  loadSession().then(() => {
+    if (tokenActive.value) {
+      Promise.all([readProfile(), readAudit()])
+    }
+  })
+}
 const ttlSec = ref(0)
 let ttlTimer = null
 
@@ -40,7 +67,6 @@ const firmwareForm = ref({ version: '' })
 
 async function loadSession() {
   if (!deviceDid.value || !targetDomain.value) {
-    antdMessage.warning('缺少 deviceDid 或 targetDomain，请从跨域认证页进入')
     return
   }
   sessionLoading.value = true
@@ -214,6 +240,16 @@ const protocolSteps = computed(() => {
 })
 
 onMounted(async () => {
+  if (!deviceDid.value || !targetDomain.value) {
+    const ok = await autoPickFromHistory()
+    if (!ok && !sessionPicker.value.visible) {
+      // No active sessions at all — show empty token card with CTA
+      session.value = { active: false, reason: '当前没有任何有效的跨域凭证' }
+      sessionLoading.value = false
+      return
+    }
+    if (!ok) return // picker is visible, wait for user to choose
+  }
   await loadSession()
   startTtlTimer()
   if (tokenActive.value) {
@@ -249,6 +285,41 @@ const historyColumns = [
 </script>
 
 <template>
+  <a-modal
+    v-model:open="sessionPicker.visible"
+    title="选择一个活跃的跨域凭证"
+    :footer="null"
+    width="640px"
+  >
+    <a-alert
+      type="info"
+      showIcon
+      style="margin-bottom: 12px"
+      message="您当前有多个活跃凭证，请选择一个进入运维台"
+    />
+    <a-list :dataSource="sessionPicker.options" size="small" bordered>
+      <template #renderItem="{ item }">
+        <a-list-item>
+          <a-list-item-meta>
+            <template #title>
+              <span class="mono" style="font-size:13px">{{ item.deviceDid }}</span>
+            </template>
+            <template #description>
+              <a-tag color="geekblue">{{ item.fromDomainCode }}</a-tag>
+              <span style="margin: 0 4px">→</span>
+              <a-tag color="cyan">{{ item.toDomainCode }}</a-tag>
+              <a-tag color="blue" style="margin-left: 6px">{{ item.permission }}</a-tag>
+              <a-tag color="purple">{{ item.resource }}</a-tag>
+            </template>
+          </a-list-item-meta>
+          <template #actions>
+            <a-button type="primary" size="small" @click="chooseSessionFromPicker(item)">进入</a-button>
+          </template>
+        </a-list-item>
+      </template>
+    </a-list>
+  </a-modal>
+
   <a-row :gutter="14" class="rc-root">
     <!-- LEFT: token + protocol + last receipt -->
     <a-col :xs="24" :lg="6" class="rc-col">
