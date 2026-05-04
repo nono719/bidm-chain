@@ -54,11 +54,11 @@ onMounted(() => {
 })
 
 const columns = [
-  { title: '时间', dataIndex: 'verifiedAt', key: 'verifiedAt', width: 170 },
-  { title: '源DID', dataIndex: 'deviceDid', key: 'deviceDid' },
-  { title: '目标域', dataIndex: 'toDomain', key: 'toDomain', width: 120 },
-  { title: '结果', dataIndex: 'status', key: 'status', width: 110 },
-  { title: 'Tx', dataIndex: 'txHash', key: 'txHash', width: 170 }
+  { title: '时间', dataIndex: 'verifiedAt', key: 'verifiedAt', width: 150 },
+  { title: '源DID', dataIndex: 'deviceDid', key: 'deviceDid', ellipsis: { showTitle: true } },
+  { title: '目标域', dataIndex: 'toDomain', key: 'toDomain', width: 90 },
+  { title: '结果', dataIndex: 'status', key: 'status', width: 100 },
+  { title: 'Tx', dataIndex: 'txHash', key: 'txHash', width: 150 }
 ]
 
 function fmtTime(v) {
@@ -162,10 +162,14 @@ function goChain() {
             size="small"
             :pagination="false"
             rowKey="requestId"
+            :scroll="{ x: 720 }"
           >
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'verifiedAt'">
                 {{ fmtTime(record.verifiedAt) }}
+              </template>
+              <template v-else-if="column.key === 'deviceDid'">
+                <span class="mono" :title="record.deviceDid">{{ record.deviceDid }}</span>
               </template>
               <template v-else-if="column.key === 'status'">
                 <a-tag :color="record.status === 'VERIFIED' ? 'green' : 'orange'">{{ record.status }}</a-tag>
