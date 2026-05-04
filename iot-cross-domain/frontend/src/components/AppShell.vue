@@ -14,7 +14,7 @@ import {
   SettingOutlined,
   BlockOutlined
 } from '@ant-design/icons-vue'
-import { apiRequest, getBaseURL, getToken, getUser, setBaseURL, setToken, setUser } from '../api/client'
+import { apiRequest, getToken, getUser, setToken, setUser } from '../api/client'
 
 const route = useRoute()
 const router = useRouter()
@@ -46,12 +46,7 @@ const navItems = computed(() => {
 
 const selectedKeys = computed(() => [route.path])
 
-const baseURL = ref(getBaseURL())
 const token = ref(getToken())
-
-watchEffect(() => {
-  setBaseURL(baseURL.value)
-})
 
 function shortToken(v) {
   if (!v) return '未登录'
@@ -112,10 +107,8 @@ watchEffect(() => {
         <a-layout-header class="app-header">
           <div class="header-left">
             <div class="page-title">{{ navItems.find((i) => i.key === route.path)?.label || 'BIDM-Chain' }}</div>
-            <div class="page-hint">Fabric 联盟链锚定 / 跨域门禁放行</div>
           </div>
           <div class="header-right">
-            <a-input v-model:value="baseURL" class="base-url" size="small" placeholder="后端地址" />
             <a-tag v-if="currentUser?.role" color="blue">{{ currentUser.role }}</a-tag>
             <a-tag v-if="currentUser?.domainCode" color="geekblue">{{ currentUser.domainCode }}</a-tag>
             <a-tag v-if="token" color="default">{{ shortToken(token) }}</a-tag>
@@ -193,18 +186,14 @@ watchEffect(() => {
 
 .header-left {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
 }
 
 .page-title {
   font-weight: 700;
+  font-size: 15px;
   color: var(--text);
-}
-
-.page-hint {
-  font-size: 12px;
-  color: var(--muted);
+  letter-spacing: 0.3px;
 }
 
 .header-right {
@@ -213,18 +202,8 @@ watchEffect(() => {
   gap: 10px;
 }
 
-.base-url {
-  width: 260px;
-}
-
 .app-content {
   padding: 18px;
   background: var(--bg);
-}
-
-@media (max-width: 980px) {
-  .base-url {
-    display: none;
-  }
 }
 </style>

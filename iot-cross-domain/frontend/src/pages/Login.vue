@@ -1,21 +1,16 @@
 <script setup>
-import { reactive, ref, watchEffect } from 'vue'
+import { reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message as antdMessage } from 'ant-design-vue'
-import { apiRequest, getBaseURL, setBaseURL, setToken, setUser } from '../api/client'
+import { apiRequest, setToken, setUser } from '../api/client'
 
 const route = useRoute()
 const router = useRouter()
 
 const loading = ref(false)
-const baseURL = ref(getBaseURL())
 const form = reactive({
   username: 'admin',
   password: '123456'
-})
-
-watchEffect(() => {
-  setBaseURL(baseURL.value)
 })
 
 async function doLogin() {
@@ -41,9 +36,6 @@ async function doLogin() {
   <div class="login-page">
     <a-card class="login-card" title="BIDM-Chain 登录" :bordered="false">
       <a-form layout="vertical" @submit.prevent="doLogin">
-        <a-form-item label="后端地址">
-          <a-input v-model:value="baseURL" placeholder="http://localhost:8080" />
-        </a-form-item>
         <a-form-item label="用户名">
           <a-input v-model:value="form.username" placeholder="admin" />
         </a-form-item>
