@@ -21,31 +21,77 @@ const router = useRouter()
 
 const currentUser = ref(getUser())
 
-const navItems = computed(() => {
-  const base = [
+const navTree = computed(() => {
+  const isAdmin = currentUser.value?.role === 'ADMIN'
+  const isLogged = !!currentUser.value?.role
+  return [
     { key: '/', label: '控制台', icon: DashboardOutlined },
-    { key: '/devices/register', label: '设备注册', icon: DeploymentUnitOutlined },
-    { key: '/devices/manage', label: '设备管理', icon: DatabaseOutlined },
-    { key: '/trust-policies', label: '信任策略', icon: SafetyCertificateOutlined },
-    { key: '/auth/cross-domain', label: '跨域认证', icon: SafetyCertificateOutlined },
-    { key: '/remote-console', label: '远程运维台', icon: DeploymentUnitOutlined },
-    { key: '/monitor', label: '状态监控', icon: MonitorOutlined },
-    { key: '/audit', label: '审计日志', icon: AuditOutlined },
-    { key: '/chain', label: '联盟链浏览', icon: BlockOutlined },
-    { key: '/oracle', label: '预言机控制中心', icon: MonitorOutlined }
+    {
+      key: 'g/devices',
+      label: '设备管理',
+      icon: DatabaseOutlined,
+      children: [
+        { key: '/devices/register', label: '设备注册', icon: DeploymentUnitOutlined },
+        { key: '/devices/manage', label: '设备列表', icon: DatabaseOutlined },
+        { key: '/monitor', label: '状态监控', icon: MonitorOutlined }
+      ]
+    },
+    {
+      key: 'g/cross',
+      label: '跨域协作',
+      icon: SafetyCertificateOutlined,
+      children: [
+        { key: '/auth/cross-domain', label: '跨域认证', icon: SafetyCertificateOutlined },
+        ...(isAdmin ? [{ key: '/approvals', label: '跨域审批', icon: CheckCircleOutlined }] : []),
+        { key: '/remote-console', label: '远程运维台', icon: DeploymentUnitOutlined },
+        ...(isLogged ? [{ key: '/trust-policies', label: '信任策略', icon: SafetyCertificateOutlined }] : [])
+      ]
+    },
+    {
+      key: 'g/chain',
+      label: '联盟链与预言机',
+      icon: BlockOutlined,
+      children: [
+        { key: '/chain', label: '联盟链浏览', icon: BlockOutlined },
+        { key: '/oracle', label: '预言机控制中心', icon: MonitorOutlined }
+      ]
+    },
+    {
+      key: 'g/audit',
+      label: '审计与管理',
+      icon: AuditOutlined,
+      children: [
+        { key: '/audit', label: '审计日志', icon: AuditOutlined },
+        ...(isAdmin ? [{ key: '/users', label: '用户管理', icon: TeamOutlined }] : []),
+        ...(isAdmin ? [{ key: '/system/manage', label: '系统管理', icon: SettingOutlined }] : [])
+      ]
+    }
   ]
-  if (!currentUser.value?.role) {
-    return base.filter((i) => i.key !== '/trust-policies')
-  }
-  if (currentUser.value?.role === 'ADMIN') {
-    base.splice(1, 0, { key: '/approvals', label: '跨域审批', icon: CheckCircleOutlined })
-    base.push({ key: '/users', label: '用户管理', icon: TeamOutlined })
-    base.push({ key: '/system/manage', label: '系统管理', icon: SettingOutlined })
-  }
-  return base
+})
+
+// flat list of all leaves (path-keyed) — used to look up the page title
+const navLeaves = computed(() => {
+  const out = []
+  navTree.value.forEach((it) => {
+    if (it.children) {
+      it.children.forEach((c) => out.push(c))
+    } else {
+      out.push(it)
+    }
+  })
+  return out
 })
 
 const selectedKeys = computed(() => [route.path])
+
+// auto-expand the group that contains the current route
+const openKeys = computed(() => {
+  for (const it of navTree.value) {
+    if (!it.children) continue
+    if (it.children.some((c) => c.key === route.path)) return [it.key]
+  }
+  return ['g/devices', 'g/cross', 'g/chain', 'g/audit']
+})
 
 const token = ref(getToken())
 
@@ -96,18 +142,30 @@ watchEffect(() => {
           <div class="brand-title">BIDM-Chain</div>
           <div class="brand-sub">跨域认证与审计控制台</div>
         </div>
-        <a-menu theme="dark" mode="inline" :selectedKeys="selectedKeys">
-          <a-menu-item v-for="it in navItems" :key="it.key" @click="onNavClick(it.key)">
-            <component :is="it.icon" />
-            <span>{{ it.label }}</span>
-          </a-menu-item>
+        <a-menu theme="dark" mode="inline" :selectedKeys="selectedKeys" :openKeys="openKeys">
+          <template v-for="it in navTree" :key="it.key">
+            <a-sub-menu v-if="it.children" :key="it.key">
+              <template #title>
+                <component :is="it.icon" />
+                <span>{{ it.label }}</span>
+              </template>
+              <a-menu-item v-for="c in it.children" :key="c.key" @click="onNavClick(c.key)">
+                <component :is="c.icon" />
+                <span>{{ c.label }}</span>
+              </a-menu-item>
+            </a-sub-menu>
+            <a-menu-item v-else :key="it.key" @click="onNavClick(it.key)">
+              <component :is="it.icon" />
+              <span>{{ it.label }}</span>
+            </a-menu-item>
+          </template>
         </a-menu>
       </a-layout-sider>
 
       <a-layout>
         <a-layout-header class="app-header">
           <div class="header-left">
-            <div class="page-title">{{ navItems.find((i) => i.key === route.path)?.label || 'BIDM-Chain' }}</div>
+            <div class="page-title">{{ navLeaves.find((i) => i.key === route.path)?.label || 'BIDM-Chain' }}</div>
           </div>
           <div class="header-right">
             <a-tag v-if="currentUser?.role" color="blue">{{ currentUser.role }}</a-tag>
