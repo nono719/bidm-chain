@@ -277,7 +277,18 @@ func (h *Handler) ChainDemoTamper(c *gin.Context) {
 	}
 	var anchor model.ChainAnchor
 	if err := h.DB.First(&anchor, req.AnchorID).Error; err != nil {
-		response.BadRequest(c, "anchor not found")
+		// Help users distinguish anchorId (chain_anchors.id) from
+		// blockHeight (the number they see in the block list).
+		var maxAnchor model.ChainAnchor
+		_ = h.DB.Order("id DESC").Limit(1).First(&maxAnchor).Error
+		var blockHit model.ChainAnchor
+		hint := ""
+		if h.DB.Where("block_height = ?", req.AnchorID).Order("id ASC").First(&blockHit).Error == nil {
+			hint = fmt.Sprintf("（输入的 %d 看起来是区块号，对应区块包含 anchorId=%d，可尝试该 ID）", req.AnchorID, blockHit.ID)
+		} else if maxAnchor.ID > 0 {
+			hint = fmt.Sprintf("（当前数据库最大 anchorId 是 %d）", maxAnchor.ID)
+		}
+		response.BadRequest(c, fmt.Sprintf("anchorId=%d 不存在%s", req.AnchorID, hint))
 		return
 	}
 	if _, ok := tamperedAnchors[anchor.ID]; ok {

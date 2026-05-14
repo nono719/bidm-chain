@@ -25,6 +25,15 @@ const loadingHashChain = ref(false)
 
 const tamperState = ref({ tamperedCount: 0, items: [] })
 
+// Flat list of all anchors loaded into the block-list table — used to
+// populate the tamper-demo picker so users don't have to type IDs.
+const availableAnchorOptions = computed(() => {
+  return (blocks.value || []).flatMap((b) => (b.anchors || []).map((a) => ({
+    value: a.id,
+    label: `#${a.id} · ${a.bizType} · 区块 ${a.blockHeight} · ${a.bizRef?.slice(0, 38) || ''}`
+  })))
+})
+
 // ===== Fault-tolerance demo (peer/orderer stop/start + test anchor) =====
 const peerNodes = ref([])
 const peerOpLoading = ref({})       // map<containerName, bool>
@@ -169,9 +178,23 @@ async function tamperAnchor() {
     antdMessage.warning('请输入要篡改的 anchorId')
     return
   }
+  // Pre-flight: warn if the ID doesn't exist in any block we've loaded.
+  // The user might have typed a block height by mistake.
+  const id = Number(tamperSelectedAnchorId.value)
+  const allAnchors = blocks.value.flatMap((b) => b.anchors || [])
+  if (allAnchors.length && !allAnchors.find((a) => a.id === id)) {
+    const maxId = Math.max(...allAnchors.map((a) => a.id))
+    const blockNumMatch = blocks.value.find((b) => b.blockHeight === id)
+    if (blockNumMatch) {
+      antdMessage.error(`anchorId=${id} 不存在 — 您可能填的是区块号 #${id}。请使用 tag 上井号后的数字（如 ${blockNumMatch.anchors?.[0]?.bizType} #${blockNumMatch.anchors?.[0]?.id}）`)
+    } else {
+      antdMessage.error(`anchorId=${id} 不存在 — 当前最大可用 anchorId 是 ${maxId}`)
+    }
+    return
+  }
   tamperLoading.value = true
   try {
-    const res = await apiRequest('/api/chain/demo/tamper', { method: 'POST', body: { anchorId: Number(tamperSelectedAnchorId.value) } })
+    const res = await apiRequest('/api/chain/demo/tamper', { method: 'POST', body: { anchorId: id } })
     if (res.code === 0) {
       antdMessage.warning('已模拟篡改数据库，请用 BizRef 模式触发链上读验证查看结果')
       tamperBizRef.value = ''
@@ -589,10 +612,21 @@ function resizeChart() {
             :message="`已篡改 anchor 数：${tamperState.tamperedCount}（仅修改数据库，链上不动）`"
           />
           <div class="tamper-help">
-            选择一个区块列表中的 anchorId（左侧表格"查看"里能看到 ID），点"模拟篡改"会偷偷把数据库 digest 改掉，链上不变；然后自动 verify 显示"✗ 不一致"。再点"恢复"还原。
+            <div><strong>⚠ anchorId 不是区块号！</strong>左侧"区块列表"里的彩色业务 tag 形如 <code>cross_auth #21</code>，井号后那个数字就是 anchorId（也可以直接点击 tag 自动填入）。</div>
+            <div style="margin-top: 6px">点"模拟篡改"会偷偷把数据库 digest 改掉，链上不变；然后自动 verify 显示"✗ 不一致"。再点"恢复"还原。</div>
           </div>
-          <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap">
-            <a-input-number v-model:value="tamperSelectedAnchorId" placeholder="anchorId" style="width: 130px" :min="1" />
+          <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; align-items: center">
+            <a-input-number v-model:value="tamperSelectedAnchorId" placeholder="anchorId（点击区块列表tag自动填）" style="width: 250px" :min="1" />
+            <a-select
+              :value="null"
+              placeholder="或从已加载的 anchor 中选择"
+              style="width: 280px"
+              :options="availableAnchorOptions"
+              @update:value="(v) => v && (tamperSelectedAnchorId = v)"
+              optionFilterProp="label"
+              show-search
+              allow-clear
+            />
             <a-button danger :loading="tamperLoading" @click="tamperAnchor">模拟篡改数据库</a-button>
           </div>
           <a-divider v-if="tamperState.items?.length" style="margin: 12px 0" />
