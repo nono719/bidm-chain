@@ -24,6 +24,13 @@ const hashChain = ref([])
 const loadingHashChain = ref(false)
 
 const tamperState = ref({ tamperedCount: 0, items: [] })
+
+// ===== Fault-tolerance demo (peer/orderer stop/start + test anchor) =====
+const peerNodes = ref([])
+const peerOpLoading = ref({})       // map<containerName, bool>
+const anchorTesting = ref(false)
+const anchorTestResult = ref(null)  // { ok, durationMs, txHash?, blockHeight?, error?, hint? }
+const anchorTestHistory = ref([])   // last 5 attempts
 const tamperLoading = ref(false)
 const tamperSelectedAnchorId = ref(null)
 const tamperBizRef = ref('')
@@ -81,8 +88,62 @@ async function loadTamperStatus() {
   if (res.code === 0) tamperState.value = res.data
 }
 
+// ----- Fault-tolerance demo loaders/actions -----
+async function loadPeerNodes() {
+  const res = await apiRequest('/api/chain/demo/peer/status')
+  if (res.code === 0) peerNodes.value = res.data || []
+}
+
+async function stopPeerNode(name) {
+  peerOpLoading.value = { ...peerOpLoading.value, [name]: true }
+  try {
+    const res = await apiRequest('/api/chain/demo/peer/stop', { method: 'POST', body: { name } })
+    if (res.code === 0) {
+      antdMessage.warning(`已停止 ${name}（演示用，记得恢复）`)
+      await loadPeerNodes()
+    } else {
+      antdMessage.error(res.message || '停止失败')
+    }
+  } finally {
+    peerOpLoading.value = { ...peerOpLoading.value, [name]: false }
+  }
+}
+
+async function startPeerNode(name) {
+  peerOpLoading.value = { ...peerOpLoading.value, [name]: true }
+  try {
+    const res = await apiRequest('/api/chain/demo/peer/start', { method: 'POST', body: { name } })
+    if (res.code === 0) {
+      antdMessage.success(`已恢复 ${name}（已等待数秒确保 gRPC 就绪）`)
+      await loadPeerNodes()
+    } else {
+      antdMessage.error(res.message || '启动失败')
+    }
+  } finally {
+    peerOpLoading.value = { ...peerOpLoading.value, [name]: false }
+  }
+}
+
+async function runTestAnchor() {
+  anchorTesting.value = true
+  try {
+    const res = await apiRequest('/api/chain/demo/test-anchor', { method: 'POST' })
+    if (res.code === 0) {
+      anchorTestResult.value = res.data
+      anchorTestHistory.value.unshift({ ...res.data, at: Date.now() })
+      if (anchorTestHistory.value.length > 5) anchorTestHistory.value.length = 5
+      if (res.data.ok) antdMessage.success(`✓ 测试上链成功（${res.data.durationMs}ms）`)
+      else antdMessage.error(`✗ 测试上链失败：${res.data.hint || res.data.error?.slice(0, 80)}`)
+    } else {
+      antdMessage.error(res.message || '调用失败')
+    }
+  } finally {
+    anchorTesting.value = false
+  }
+}
+
 async function refreshAll() {
-  await Promise.all([loadInfo(), loadTopology(), loadBlocks(), loadHashChain(), loadTamperStatus()])
+  await Promise.all([loadInfo(), loadTopology(), loadBlocks(), loadHashChain(), loadTamperStatus(), isAdmin.value ? loadPeerNodes() : Promise.resolve()])
 }
 
 async function detectRole() {
@@ -549,6 +610,121 @@ function resizeChart() {
       </a-col>
     </a-row>
 
+    <a-card v-if="isAdmin" title="🛡️ 故障容错演示（停一个节点观察链是否还工作）" class="panel-card">
+      <template #extra>
+        <a-button type="link" size="small" @click="loadPeerNodes">刷新节点状态</a-button>
+      </template>
+      <a-alert
+        type="info"
+        showIcon
+        style="margin-bottom: 12px"
+        message="此演示直接通过 docker stop / docker start 操控 Fabric 容器。停 orderer 或 peer0.org1 后再点「测试上链」可观察链不工作；恢复后再测可看到链恢复。仅限 ADMIN 演示使用，请在结束时确保所有节点重新启动。"
+      />
+      <a-row :gutter="12">
+        <a-col :xs="24" :lg="14">
+          <a-table
+            size="small"
+            :pagination="false"
+            :dataSource="peerNodes"
+            rowKey="name"
+            :columns="[
+              { title: '容器', dataIndex: 'name', key: 'name' },
+              { title: '角色', dataIndex: 'role', key: 'role', width: 90 },
+              { title: '端点', dataIndex: 'endpoint', key: 'endpoint', width: 140 },
+              { title: '状态', key: 'state', width: 110 },
+              { title: '操作', key: 'op', width: 170 }
+            ]"
+          >
+            <template #bodyCell="{ column, record }">
+              <template v-if="column.key === 'name'">
+                <div class="mono" style="font-size:12px">{{ record.name }}</div>
+                <div style="font-size:11px;color:#64748b;margin-top:2px">{{ record.description }}</div>
+              </template>
+              <template v-else-if="column.dataIndex === 'role'">
+                <a-tag :color="record.role === 'orderer' ? 'gold' : 'blue'">{{ record.role }}</a-tag>
+              </template>
+              <template v-else-if="column.dataIndex === 'endpoint'">
+                <span class="mono" style="font-size:12px">{{ record.endpoint }}</span>
+              </template>
+              <template v-else-if="column.key === 'state'">
+                <a-tag :color="record.running ? 'green' : 'red'">
+                  {{ record.running ? '运行中' : record.state }}
+                </a-tag>
+              </template>
+              <template v-else-if="column.key === 'op'">
+                <a-space size="small">
+                  <a-button
+                    v-if="record.running"
+                    danger
+                    size="small"
+                    :loading="peerOpLoading[record.name]"
+                    @click="stopPeerNode(record.name)"
+                  >停止</a-button>
+                  <a-button
+                    v-else
+                    type="primary"
+                    size="small"
+                    :loading="peerOpLoading[record.name]"
+                    @click="startPeerNode(record.name)"
+                  >启动</a-button>
+                </a-space>
+              </template>
+            </template>
+          </a-table>
+        </a-col>
+        <a-col :xs="24" :lg="10">
+          <a-card class="inner-card" size="small" title="实时测试上链">
+            <a-alert
+              v-if="anchorTestResult"
+              :type="anchorTestResult.ok ? 'success' : 'error'"
+              showIcon
+              style="margin-bottom: 10px"
+              :message="anchorTestResult.ok
+                ? `✓ 链上锚定成功 — 区块 #${anchorTestResult.blockHeight} — 耗时 ${anchorTestResult.durationMs}ms`
+                : `✗ 链上锚定失败（${anchorTestResult.durationMs}ms）：${anchorTestResult.hint || ''}`"
+            />
+            <div v-if="anchorTestResult && !anchorTestResult.ok" class="anchor-err mono">
+              {{ anchorTestResult.error }}
+            </div>
+            <a-button
+              type="primary"
+              block
+              size="large"
+              :loading="anchorTesting"
+              style="margin-top: 8px"
+              @click="runTestAnchor"
+            >发起一次测试上链</a-button>
+            <div v-if="anchorTestResult?.chain?.endorsers?.length" style="margin-top: 12px">
+              <div style="font-size: 12px; color: #64748b; margin-bottom: 4px">本次背书者：</div>
+              <a-space wrap size="small">
+                <a-tag
+                  v-for="(e, i) in anchorTestResult.chain.endorsers"
+                  :key="i"
+                  :color="e.mspId === 'Org1MSP' ? 'green' : (e.mspId === 'Org2MSP' ? 'cyan' : 'blue')"
+                >✓ {{ e.mspId }} / {{ e.commonName }}</a-tag>
+              </a-space>
+            </div>
+            <a-divider v-if="anchorTestHistory.length" style="margin: 12px 0" />
+            <div v-if="anchorTestHistory.length">
+              <div style="font-size: 12px; color: #64748b; margin-bottom: 6px">最近 5 次：</div>
+              <a-timeline>
+                <a-timeline-item
+                  v-for="(h, i) in anchorTestHistory"
+                  :key="i"
+                  :color="h.ok ? 'green' : 'red'"
+                >
+                  <span style="font-size: 12px">
+                    {{ h.ok ? `✓ #${h.blockHeight}` : '✗ 失败' }} · {{ h.durationMs }}ms
+                    <span v-if="!h.ok" style="color:#dc2626">— {{ h.hint }}</span>
+                  </span>
+                </a-timeline-item>
+              </a-timeline>
+            </div>
+          </a-card>
+        </a-col>
+      </a-row>
+    </a-card>
+
     <a-modal
       v-model:open="blockDetailVisible"
       :title="blockDetail ? `区块 #${blockDetail.blockHeight}` : '区块详情'"
@@ -690,6 +866,18 @@ function resizeChart() {
   background: #eef2ff;
   border-radius: 6px;
   font-size: 12px;
+}
+
+.anchor-err {
+  font-size: 11px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: #991b1b;
+  word-break: break-all;
+  max-height: 96px;
+  overflow-y: auto;
 }
 
 .tamper-help {
