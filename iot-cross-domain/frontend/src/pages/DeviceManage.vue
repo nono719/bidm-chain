@@ -4,6 +4,7 @@ import { message as antdMessage } from 'ant-design-vue'
 import dayjs from 'dayjs'
 import { apiRequest, getUser } from '../api/client'
 import { DEVICE_TYPE_FILTER_OPTIONS, DEVICE_TYPE_OPTIONS } from '../constants/deviceTypes'
+import DeviceMetadataForm from '../components/DeviceMetadataForm.vue'
 
 const me = ref(getUser())
 const isAdmin = computed(() => me.value?.role === 'ADMIN')
@@ -211,8 +212,8 @@ onMounted(loadDevices)
         <a-form-item label="设备类型">
           <a-select v-model:value="editForm.deviceType" :options="DEVICE_TYPE_OPTIONS" />
         </a-form-item>
-        <a-form-item label="元数据（JSON）">
-          <a-textarea v-model:value="editForm.metadataJson" :rows="4" />
+        <a-form-item label="设备元数据">
+          <DeviceMetadataForm v-model="editForm.metadataJson" :device-type="editForm.deviceType" />
         </a-form-item>
         <a-alert v-if="!isAdmin" type="info" showIcon message="域管理员仅能管理本域设备" />
       </a-form>

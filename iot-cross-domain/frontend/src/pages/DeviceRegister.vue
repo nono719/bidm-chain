@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { message as antdMessage } from 'ant-design-vue'
 import { apiRequest, getUser } from '../api/client'
 import { DEVICE_TYPE_OPTIONS } from '../constants/deviceTypes'
+import DeviceMetadataForm from '../components/DeviceMetadataForm.vue'
 
 const step = ref(0)
 const submitting = ref(false)
@@ -251,8 +252,8 @@ function prev() {
               <a-form-item label="设备凭证（演示用）">
                 <a-input v-model:value="form.credential" placeholder="dev-secret-001" />
               </a-form-item>
-              <a-form-item label="元数据（JSON）">
-                <a-textarea v-model:value="form.metadataJson" :rows="4" />
+              <a-form-item label="设备元数据">
+                <DeviceMetadataForm v-model="form.metadataJson" :device-type="form.deviceType" />
               </a-form-item>
             </a-form>
           </template>
