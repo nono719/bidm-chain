@@ -618,10 +618,10 @@ onUnmounted(() => {
                 optionFilterProp="label"
                 placeholder="请选择已注册设备"
               >
-                <template #option="{ data }">
+                <template #option="option">
                   <div style="display: flex; flex-direction: column; gap: 2px;">
-                    <span>{{ data.label }}</span>
-                    <span class="mono" style="font-size: 12px; color: #667085;">{{ data.did }}</span>
+                    <span>{{ option.label }}</span>
+                    <span class="mono" style="font-size: 12px; color: #667085;">{{ option.did }}</span>
                   </div>
                 </template>
               </a-select>
