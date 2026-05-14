@@ -1,8 +1,9 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message as antdMessage } from 'ant-design-vue'
 import dayjs from 'dayjs'
+import * as echarts from 'echarts'
 import {
   ReloadOutlined,
   PoweroffOutlined,
@@ -11,7 +12,14 @@ import {
   ProfileOutlined,
   AreaChartOutlined,
   AuditOutlined,
-  StopOutlined
+  StopOutlined,
+  ApiOutlined,
+  VideoCameraOutlined,
+  LockOutlined,
+  ThunderboltOutlined,
+  CarOutlined,
+  ControlOutlined,
+  HomeOutlined
 } from '@ant-design/icons-vue'
 import { apiRequest, getBaseURL, getToken } from '../api/client'
 
@@ -64,6 +72,130 @@ const opLoading = ref(false)
 
 const configForm = ref({ samplingInterval: 30, mode: 'normal' })
 const firmwareForm = ref({ version: '' })
+
+// ===== Flying packet animation (visualizes cross-domain operations) =====
+const flyingPackets = ref([])  // [{id, kind, label, color}]
+let packetSeq = 0
+function flyPacket(kind, label, color) {
+  const id = ++packetSeq
+  flyingPackets.value.push({ id, kind, label, color })
+  setTimeout(() => {
+    flyingPackets.value = flyingPackets.value.filter((p) => p.id !== id)
+  }, 1800)
+}
+
+// ===== Scenario-aware device profile (based on deviceType) =====
+const SCENARIO_MAP = {
+  '传感器':       { key: 'sensor',         icon: AreaChartOutlined,    color: '#10b981', name: '温湿度传感器', readLabel: '读取实时遥测', metricLabels: ['温度 (°C)', '湿度 (%)'] },
+  'sensor':       { key: 'sensor',         icon: AreaChartOutlined,    color: '#10b981', name: '温湿度传感器', readLabel: '读取实时遥测', metricLabels: ['温度 (°C)', '湿度 (%)'] },
+  'SENSOR':       { key: 'sensor',         icon: AreaChartOutlined,    color: '#10b981', name: '温湿度传感器', readLabel: '读取实时遥测', metricLabels: ['温度 (°C)', '湿度 (%)'] },
+  '环境监测设备':  { key: 'env',            icon: AreaChartOutlined,    color: '#06b6d4', name: '环境监测', readLabel: '读取空气质量', metricLabels: ['PM2.5 (μg/m³)', 'CO₂ (ppm)'] },
+  '执行器':       { key: 'actuator',       icon: ControlOutlined,      color: '#f59e0b', name: '执行器', readLabel: '读取当前状态', metricLabels: ['工作模式', '功率 (%)'] },
+  '网关':         { key: 'gateway',        icon: ApiOutlined,          color: '#3b82f6', name: '物联网网关', readLabel: '读取连接设备', metricLabels: ['连接数', '吞吐 (KB/s)'] },
+  '摄像头':       { key: 'camera',         icon: VideoCameraOutlined,  color: '#8b5cf6', name: '摄像头', readLabel: '抓拍当前帧', metricLabels: ['帧率', '分辨率'] },
+  '门禁设备':     { key: 'access',         icon: LockOutlined,         color: '#ef4444', name: '门禁设备', readLabel: '读取通行记录', metricLabels: ['今日通行', '未授权尝试'] },
+  '智能电表':     { key: 'smart-meter',    icon: ThunderboltOutlined,  color: '#f97316', name: '智能电表', readLabel: '读取实时功率', metricLabels: ['功率 (kW)', '今日电量 (kWh)'] },
+  '智能家电':     { key: 'appliance',      icon: HomeOutlined,         color: '#22c55e', name: '智能家电', readLabel: '读取运行状态', metricLabels: ['工作模式', '功率 (W)'] },
+  '工业控制器':   { key: 'plc',            icon: ControlOutlined,      color: '#0ea5e9', name: 'PLC 控制器', readLabel: '读取寄存器', metricLabels: ['寄存器值', '运行周期 (ms)'] },
+  '车载终端':     { key: 'vehicle',        icon: CarOutlined,          color: '#a855f7', name: '车载终端', readLabel: '读取车辆数据', metricLabels: ['车速 (km/h)', '油量 (%)'] }
+}
+const DEFAULT_SCENARIO = { key: 'device', icon: ProfileOutlined, color: '#64748b', name: '通用设备', readLabel: '读取设备数据', metricLabels: ['数值A', '数值B'] }
+
+const scenario = computed(() => {
+  const dt = profile.value?.device?.deviceType || ''
+  return SCENARIO_MAP[dt] || DEFAULT_SCENARIO
+})
+
+// ===== Mock sensor data (driven by real device_state_updates) =====
+// Generates "as if streaming" gauge values from the latest oracle score.
+const liveMetricA = ref(0)
+const liveMetricB = ref(0)
+let liveTimer = null
+
+function refreshLiveMetrics() {
+  const score = profile.value?.lastState?.score ?? 80
+  const sk = scenario.value.key
+  // Deterministic-ish: vary metric around a base influenced by score so the
+  // gauge moves but stays plausible.
+  const jitter = () => (Math.random() - 0.5) * 6
+  if (sk === 'sensor' || sk === 'env') {
+    liveMetricA.value = +(22 + (score / 100) * 8 + jitter()).toFixed(1)
+    liveMetricB.value = +(55 + (score / 100) * 20 + jitter()).toFixed(1)
+  } else if (sk === 'smart-meter') {
+    liveMetricA.value = +(0.4 + (score / 100) * 2 + jitter() * 0.1).toFixed(2)
+    liveMetricB.value = +(50 + (score / 100) * 100 + jitter()).toFixed(1)
+  } else if (sk === 'gateway') {
+    liveMetricA.value = Math.max(0, Math.round(3 + (score / 100) * 12 + jitter()))
+    liveMetricB.value = Math.max(0, +((score / 100) * 200 + jitter()).toFixed(1))
+  } else if (sk === 'vehicle') {
+    liveMetricA.value = Math.max(0, Math.round(40 + (score / 100) * 60 + jitter()))
+    liveMetricB.value = Math.max(0, Math.min(100, Math.round((score / 100) * 90 + jitter())))
+  } else if (sk === 'camera') {
+    liveMetricA.value = 25 + Math.round(jitter())  // fps
+    liveMetricB.value = profile.value?.device?.runtimeState === 'TRUSTED' ? '1080p' : '480p'
+  } else if (sk === 'access') {
+    liveMetricA.value = Math.max(0, Math.round(12 + (score / 100) * 8 + jitter()))
+    liveMetricB.value = Math.max(0, Math.round(jitter() + 1))
+  } else if (sk === 'actuator' || sk === 'appliance') {
+    liveMetricA.value = score >= 70 ? '运行中' : '待机'
+    liveMetricB.value = Math.max(0, Math.round(40 + (score / 100) * 50 + jitter()))
+  } else if (sk === 'plc') {
+    liveMetricA.value = Math.max(0, Math.round(1024 + (score / 100) * 3072 + jitter() * 20))
+    liveMetricB.value = Math.max(1, Math.round(5 + jitter()))
+  } else {
+    liveMetricA.value = +(score + jitter()).toFixed(1)
+    liveMetricB.value = +(50 + jitter()).toFixed(1)
+  }
+}
+
+// ===== ECharts gauge for the primary metric =====
+const gaugeRef = ref(null)
+let gaugeChart = null
+
+function renderGauge() {
+  if (!gaugeRef.value) return
+  if (!gaugeChart) gaugeChart = echarts.init(gaugeRef.value)
+  const sk = scenario.value.key
+  const isNumeric = typeof liveMetricA.value === 'number'
+  if (!isNumeric) {
+    // For non-numeric metrics, render a status dial.
+    gaugeChart.setOption({
+      series: [{
+        type: 'gauge', radius: '95%', min: 0, max: 100,
+        progress: { show: true, width: 12 },
+        axisLine: { lineStyle: { width: 12, color: [[1, scenario.value.color]] } },
+        axisTick: { show: false }, splitLine: { show: false }, axisLabel: { show: false },
+        pointer: { show: false },
+        anchor: { show: false },
+        title: { show: false },
+        detail: { valueAnimation: true, fontSize: 22, color: scenario.value.color, formatter: () => liveMetricA.value },
+        data: [{ value: 70 }]
+      }]
+    })
+    return
+  }
+  // Sensible per-scenario max for the gauge.
+  const maxByKey = { sensor: 50, env: 200, 'smart-meter': 5, gateway: 50, vehicle: 200, plc: 4096, access: 30, default: 100 }
+  const max = maxByKey[sk] || maxByKey.default
+  gaugeChart.setOption({
+    series: [{
+      type: 'gauge', radius: '95%', min: 0, max,
+      progress: { show: true, width: 14, itemStyle: { color: scenario.value.color } },
+      axisLine: { lineStyle: { width: 14, color: [[1, '#e5e7eb']] } },
+      pointer: { show: false }, anchor: { show: false },
+      axisTick: { show: false }, splitLine: { show: false },
+      axisLabel: { color: '#94a3b8', fontSize: 9, distance: -22 },
+      title: { offsetCenter: [0, '70%'], fontSize: 11, color: '#64748b' },
+      detail: { valueAnimation: true, fontSize: 24, color: scenario.value.color, offsetCenter: [0, '0%'], formatter: '{value}' },
+      data: [{ value: liveMetricA.value, name: scenario.value.metricLabels[0] }]
+    }]
+  })
+}
+
+watch([liveMetricA, scenario, () => profile.value?.device?.runtimeState], async () => {
+  await nextTick()
+  renderGauge()
+}, { flush: 'post' })
 
 async function loadSession() {
   if (!deviceDid.value || !targetDomain.value) {
@@ -127,10 +259,12 @@ async function callRemote(path, method = 'GET', body) {
 
 async function readProfile() {
   opLoading.value = true
+  flyPacket('read', '读设备档案', '#3b82f6')
   try {
     const res = await callRemote('/api/operations/remote/profile')
     if (res?.code === 0) {
       profile.value = res.data
+      refreshLiveMetrics()
       antdMessage.success('已读取设备档案')
     } else {
       antdMessage.error(res?.message || '读取失败')
@@ -142,10 +276,12 @@ async function readProfile() {
 
 async function readTelemetry() {
   opLoading.value = true
+  flyPacket('read', scenario.value.readLabel, '#06b6d4')
   try {
     const res = await callRemote('/api/operations/remote/telemetry?limit=20')
     if (res?.code === 0) {
       telemetry.value = res.data?.items || []
+      refreshLiveMetrics()
       antdMessage.success(`已读取 ${res.data?.count || 0} 条遥测`)
     }
   } finally {
@@ -155,6 +291,7 @@ async function readTelemetry() {
 
 async function readAudit() {
   opLoading.value = true
+  flyPacket('read', '读链上审计', '#7c3aed')
   try {
     const res = await callRemote('/api/operations/remote/audit-trail?limit=30')
     if (res?.code === 0) {
@@ -168,6 +305,9 @@ async function readAudit() {
 
 async function executeOp(operation, payload) {
   opLoading.value = true
+  const opColors = { RESTART_DEVICE: '#f59e0b', WRITE_DEVICE_CONFIG: '#ec4899', ADMIN_FIRMWARE_UPGRADE: '#dc2626' }
+  const opLabels = { RESTART_DEVICE: '重启设备', WRITE_DEVICE_CONFIG: '下发配置', ADMIN_FIRMWARE_UPGRADE: '固件升级' }
+  flyPacket('write', opLabels[operation] || operation, opColors[operation] || '#f59e0b')
   try {
     const body = {
       deviceDid: deviceDid.value,
@@ -179,7 +319,7 @@ async function executeOp(operation, payload) {
     if (res?.code === 0) {
       lastReceipt.value = res.data
       opHistory.value.unshift({ ...res.data, runAt: Date.now() })
-      antdMessage.success(`✓ ${operation} 已执行${res.data?.chain?.txHash ? '并上链' : ''}`)
+      antdMessage.success(`✓ ${opLabels[operation] || operation} 已执行${res.data?.chain?.txHash ? '并上链' : ''}`)
       // Auto-refresh device view
       await Promise.all([readProfile(), readAudit()])
     } else {
@@ -254,11 +394,18 @@ onMounted(async () => {
   startTtlTimer()
   if (tokenActive.value) {
     await Promise.all([readProfile(), readAudit()])
+    refreshLiveMetrics()
   }
+  // Live metrics tick — gives the gauge a "real-time streaming" feel.
+  liveTimer = setInterval(() => {
+    if (profile.value && tokenActive.value) refreshLiveMetrics()
+  }, 2500)
 })
 
 onUnmounted(() => {
   if (ttlTimer) clearInterval(ttlTimer)
+  if (liveTimer) clearInterval(liveTimer)
+  if (gaugeChart) { try { gaugeChart.dispose() } catch (_) {} gaugeChart = null }
 })
 
 const telemetryColumns = [
@@ -319,6 +466,38 @@ const historyColumns = [
       </template>
     </a-list>
   </a-modal>
+
+  <!-- ========== Cross-domain channel banner (flying-packet animation) ========== -->
+  <div v-if="tokenActive" class="cross-channel">
+    <div class="cross-end cross-end-src">
+      <div class="cross-end-label">源域</div>
+      <div class="cross-end-value">{{ session?.fromDomain || '-' }}</div>
+      <div class="cross-end-sub">操作员 {{ session?.requestedBy || '-' }}</div>
+    </div>
+    <div class="cross-track">
+      <div class="cross-track-line"></div>
+      <div class="cross-token-pill">
+        <span class="cross-token-dot"></span>
+        AuthToken · {{ session?.permission }} / {{ session?.resource }} · ⏱ {{ ttlFormatted }}
+      </div>
+      <transition-group name="packet" tag="div" class="cross-packets">
+        <div
+          v-for="p in flyingPackets"
+          :key="p.id"
+          class="packet"
+          :class="'packet-' + p.kind"
+          :style="{ background: p.color, boxShadow: `0 0 12px ${p.color}` }"
+        >
+          {{ p.kind === 'read' ? '↘' : '↗' }} {{ p.label }}
+        </div>
+      </transition-group>
+    </div>
+    <div class="cross-end cross-end-tgt">
+      <div class="cross-end-label">目标域</div>
+      <div class="cross-end-value">{{ session?.toDomain || '-' }}</div>
+      <div class="cross-end-sub mono">{{ profile?.device?.deviceDid?.slice(0, 26) || '-' }}…</div>
+    </div>
+  </div>
 
   <a-row :gutter="14" class="rc-root">
     <!-- LEFT: token + protocol + last receipt -->
@@ -400,18 +579,18 @@ const historyColumns = [
           <a-tab-pane key="read" tab="读取目标域数据">
             <div class="ops-grid">
               <div class="ops-row" @click="readProfile">
-                <profile-outlined class="ops-icon" />
+                <profile-outlined class="ops-icon" :style="{ color: scenario.color }" />
                 <div class="ops-text">
                   <div class="ops-title">读设备档案</div>
-                  <div class="ops-desc">从目标域读 device 表 + lifecycle + 最新 oracle 状态</div>
+                  <div class="ops-desc">{{ scenario.name }} · 元数据 / 生命周期 / 最新评分</div>
                 </div>
                 <a-tag color="blue">READ profile</a-tag>
               </div>
               <div class="ops-row" @click="readTelemetry">
-                <area-chart-outlined class="ops-icon" />
+                <component :is="scenario.icon" class="ops-icon" :style="{ color: scenario.color }" />
                 <div class="ops-text">
-                  <div class="ops-title">读遥测数据</div>
-                  <div class="ops-desc">device_state_updates 最新 20 条（带链上 TxHash 校验）</div>
+                  <div class="ops-title">{{ scenario.readLabel }}</div>
+                  <div class="ops-desc">实时拉取 {{ scenario.metricLabels[0] }} / {{ scenario.metricLabels[1] }} 等指标</div>
                 </div>
                 <a-tag color="blue">READ telemetry</a-tag>
               </div>
@@ -516,7 +695,10 @@ const historyColumns = [
           <a-descriptions size="small" :column="2" bordered>
             <a-descriptions-item label="DID" :span="2"><span class="mono">{{ profile.device?.deviceDid }}</span></a-descriptions-item>
             <a-descriptions-item label="名称">{{ profile.device?.displayName }}</a-descriptions-item>
-            <a-descriptions-item label="类型">{{ profile.device?.deviceType }}</a-descriptions-item>
+            <a-descriptions-item label="类型">
+              <component :is="scenario.icon" :style="{ color: scenario.color, marginRight: '4px' }" />
+              {{ profile.device?.deviceType }}
+            </a-descriptions-item>
             <a-descriptions-item label="所属域">
               <a-tag color="geekblue">{{ profile.device?.domainCode }}</a-tag>
             </a-descriptions-item>
@@ -529,10 +711,62 @@ const historyColumns = [
             </a-descriptions-item>
             <a-descriptions-item label="链上锚定数">{{ profile.anchorCount }}</a-descriptions-item>
             <a-descriptions-item label="最新评分">{{ profile.lastState?.score ?? '-' }}</a-descriptions-item>
-            <a-descriptions-item label="Metadata" :span="2">
-              <pre class="meta-pre">{{ profile.device?.metadataJson || '{}' }}</pre>
-            </a-descriptions-item>
           </a-descriptions>
+        </div>
+      </a-card>
+
+      <!-- ========== Scenario dashboard (changes shape per device type) ========== -->
+      <a-card v-if="profile" class="rc-card scenario-card">
+        <template #title>
+          <component :is="scenario.icon" :style="{ color: scenario.color, marginRight: '6px' }" />
+          业务场景实时面板 · {{ scenario.name }}
+        </template>
+        <template #extra>
+          <a-tag :color="profile?.device?.runtimeState === 'TRUSTED' ? 'green' : 'orange'">
+            {{ profile?.device?.runtimeState }}
+          </a-tag>
+        </template>
+        <div class="scenario-body">
+          <!-- Gauge for primary metric -->
+          <div class="scenario-gauge-wrap">
+            <div ref="gaugeRef" class="scenario-gauge"></div>
+            <div class="scenario-metric-name">{{ scenario.metricLabels[0] }}</div>
+          </div>
+          <!-- Secondary metric + scenario-specific extras -->
+          <div class="scenario-info">
+            <div class="scenario-metric">
+              <div class="scenario-metric-label">{{ scenario.metricLabels[1] }}</div>
+              <div class="scenario-metric-value" :style="{ color: scenario.color }">{{ liveMetricB }}</div>
+            </div>
+            <!-- Scenario-specific extras -->
+            <div v-if="scenario.key === 'camera'" class="scenario-camera">
+              <div class="camera-frame">
+                <video-camera-outlined :style="{ fontSize: '36px', color: scenario.color }" />
+                <div class="camera-rec">● REC</div>
+              </div>
+              <div class="scenario-mini-hint">实时画面 (mock)</div>
+            </div>
+            <div v-else-if="scenario.key === 'access'" class="scenario-door">
+              <div class="door" :class="{ 'door-open': profile?.device?.runtimeState === 'TRUSTED' }">
+                <lock-outlined :style="{ fontSize: '32px', color: scenario.color }" />
+              </div>
+              <div class="scenario-mini-hint">
+                {{ profile?.device?.runtimeState === 'TRUSTED' ? '门禁可放行' : '门禁已锁定' }}
+              </div>
+            </div>
+            <div v-else-if="scenario.key === 'actuator' || scenario.key === 'appliance'" class="scenario-switch">
+              <a-switch :checked="profile?.device?.runtimeState === 'TRUSTED'" disabled />
+              <div class="scenario-mini-hint">{{ profile?.device?.runtimeState === 'TRUSTED' ? '设备运行中' : '设备待机' }}</div>
+            </div>
+            <div v-else-if="scenario.key === 'vehicle'" class="scenario-vehicle">
+              <car-outlined :style="{ fontSize: '36px', color: scenario.color }" />
+              <div class="scenario-mini-hint">车载终端 · 在线</div>
+            </div>
+            <div v-else class="scenario-pulse">
+              <div class="pulse-dot" :style="{ background: scenario.color }"></div>
+              <div class="scenario-mini-hint">数据流实时刷新 (每 2.5s)</div>
+            </div>
+          </div>
         </div>
       </a-card>
 
@@ -777,4 +1011,275 @@ const historyColumns = [
   word-break: break-all;
 }
 .mono.small { font-size: 11px; }
+
+/* ============== Cross-domain channel banner ============== */
+.cross-channel {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  padding: 14px 16px;
+  margin: 0 0 12px;
+  background: linear-gradient(90deg, #1e293b 0%, #1e2a78 50%, #312e81 100%);
+  border-radius: 14px;
+  color: #fff;
+  position: relative;
+  overflow: hidden;
+}
+
+.cross-end {
+  flex: 0 0 220px;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.cross-end-label {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.7);
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+.cross-end-value {
+  font-size: 18px;
+  font-weight: 700;
+  margin-top: 4px;
+  letter-spacing: 0.5px;
+}
+
+.cross-end-sub {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
+  margin-top: 2px;
+}
+
+.cross-end-tgt {
+  text-align: right;
+}
+
+.cross-track {
+  position: relative;
+  flex: 1;
+  min-height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cross-track-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent 0%, rgba(248, 192, 0, 0.7) 30%, rgba(248, 192, 0, 0.7) 70%, transparent 100%);
+  transform: translateY(-50%);
+}
+
+.cross-token-pill {
+  position: relative;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #f8c000 0%, #ffa840 100%);
+  color: #1f2937;
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgba(248, 192, 0, 0.45);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cross-token-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #16a34a;
+  box-shadow: 0 0 6px #16a34a;
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.5; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+
+.cross-packets {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.packet {
+  position: absolute;
+  top: 50%;
+  left: 20px;
+  transform: translateY(-50%);
+  padding: 4px 10px;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  animation: fly-right 1.6s ease-in-out forwards;
+}
+
+@keyframes fly-right {
+  0% { left: 8%; opacity: 0; transform: translateY(-50%) scale(0.6); }
+  15% { opacity: 1; transform: translateY(-50%) scale(1); }
+  85% { opacity: 1; transform: translateY(-50%) scale(1); }
+  100% { left: 92%; opacity: 0; transform: translateY(-50%) scale(0.8); }
+}
+
+.packet-write {
+  animation-name: fly-right-write;
+}
+
+@keyframes fly-right-write {
+  0% { left: 8%; opacity: 0; transform: translateY(-30%) scale(0.6); }
+  15% { opacity: 1; transform: translateY(-50%) scale(1); }
+  85% { opacity: 1; transform: translateY(-50%) scale(1); }
+  100% { left: 92%; opacity: 0; transform: translateY(-50%) scale(0.8); }
+}
+
+/* ============== Scenario dashboard ============== */
+.scenario-card {
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+}
+
+.scenario-body {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.scenario-gauge-wrap {
+  position: relative;
+  width: 180px;
+  flex: 0 0 180px;
+  text-align: center;
+}
+
+.scenario-gauge {
+  width: 180px;
+  height: 150px;
+}
+
+.scenario-metric-name {
+  font-size: 11px;
+  color: #64748b;
+  margin-top: -8px;
+}
+
+.scenario-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.scenario-metric {
+  padding: 8px 12px;
+  background: #f8fafc;
+  border-radius: 8px;
+  border-left: 3px solid #cbd5e1;
+}
+
+.scenario-metric-label {
+  font-size: 11px;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.scenario-metric-value {
+  font-size: 22px;
+  font-weight: 700;
+  margin-top: 2px;
+}
+
+.scenario-mini-hint {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-top: 6px;
+  text-align: center;
+}
+
+.scenario-camera .camera-frame {
+  position: relative;
+  height: 80px;
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.camera-rec {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  font-size: 10px;
+  color: #f87171;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  animation: blink 1.4s linear infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
+.scenario-door .door {
+  height: 80px;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #fef3c7 0%, #fde68a 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #fbbf24;
+  transition: all 0.5s ease;
+}
+
+.scenario-door .door.door-open {
+  background: linear-gradient(180deg, #d1fae5 0%, #a7f3d0 100%);
+  border-color: #10b981;
+}
+
+.scenario-switch {
+  text-align: center;
+  padding: 14px 0;
+}
+
+.scenario-vehicle {
+  text-align: center;
+  padding: 14px 0;
+}
+
+.scenario-pulse {
+  text-align: center;
+  padding: 14px 0;
+}
+
+.scenario-pulse .pulse-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  margin: 0 auto;
+  animation: pulse-dot-big 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse-dot-big {
+  0%, 100% { opacity: 0.4; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1.3); }
+}
+
+/* Packet transition group fallback */
+.packet-enter-active, .packet-leave-active { transition: opacity 0.2s; }
+.packet-enter-from, .packet-leave-to { opacity: 0; }
 </style>
