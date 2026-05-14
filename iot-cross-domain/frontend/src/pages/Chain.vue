@@ -111,16 +111,29 @@ async function stopPeerNode(name) {
 
 async function startPeerNode(name) {
   peerOpLoading.value = { ...peerOpLoading.value, [name]: true }
+  antdMessage.loading({ content: `正在启动 ${name}，并等待 gateway 服务发现刷新（约 12 秒）...`, key: 'peerStart', duration: 0 })
   try {
     const res = await apiRequest('/api/chain/demo/peer/start', { method: 'POST', body: { name } })
+    antdMessage.destroy('peerStart')
     if (res.code === 0) {
-      antdMessage.success(`已恢复 ${name}（已等待数秒确保 gRPC 就绪）`)
+      antdMessage.success(`✓ ${name} 已恢复，可以再次测试上链`)
       await loadPeerNodes()
     } else {
       antdMessage.error(res.message || '启动失败')
     }
   } finally {
     peerOpLoading.value = { ...peerOpLoading.value, [name]: false }
+  }
+}
+
+function copyText(text, label = '内容') {
+  if (!text) return
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text)
+      .then(() => antdMessage.success(`${label} 已复制到剪贴板`))
+      .catch(() => antdMessage.warning('复制失败，请手动选中文本'))
+  } else {
+    antdMessage.warning('浏览器不支持自动复制，请手动选中')
   }
 }
 
@@ -683,8 +696,20 @@ function resizeChart() {
                 ? `✓ 链上锚定成功 — 区块 #${anchorTestResult.blockHeight} — 耗时 ${anchorTestResult.durationMs}ms`
                 : `✗ 链上锚定失败（${anchorTestResult.durationMs}ms）：${anchorTestResult.hint || ''}`"
             />
+            <!-- Success: show full TxHash with copy + a link to the audit/chain page -->
+            <div v-if="anchorTestResult?.ok" class="anchor-tx">
+              <div class="anchor-tx-label">交易哈希 TxHash</div>
+              <div class="anchor-tx-value mono" :title="anchorTestResult.txHash" @click="copyText(anchorTestResult.txHash, 'TxHash')">
+                {{ anchorTestResult.txHash }}
+              </div>
+              <div class="anchor-tx-meta">区块高度 #{{ anchorTestResult.blockHeight }} · 点击复制完整哈希</div>
+            </div>
+            <!-- Failure: explain there is no on-chain TxHash because submission was aborted -->
             <div v-if="anchorTestResult && !anchorTestResult.ok" class="anchor-err mono">
               {{ anchorTestResult.error }}
+            </div>
+            <div v-if="anchorTestResult && !anchorTestResult.ok" class="anchor-tx-meta" style="margin-top: 6px">
+              本次提交在背书 / 排序阶段被拒绝，**没有生成链上 TxHash**（链上账本未发生变化）
             </div>
             <a-button
               type="primary"
@@ -713,10 +738,18 @@ function resizeChart() {
                   :key="i"
                   :color="h.ok ? 'green' : 'red'"
                 >
-                  <span style="font-size: 12px">
-                    {{ h.ok ? `✓ #${h.blockHeight}` : '✗ 失败' }} · {{ h.durationMs }}ms
-                    <span v-if="!h.ok" style="color:#dc2626">— {{ h.hint }}</span>
-                  </span>
+                  <div style="font-size: 12px; line-height: 1.6">
+                    <div>
+                      {{ h.ok ? `✓ #${h.blockHeight}` : '✗ 失败' }} · {{ h.durationMs }}ms
+                      <span v-if="!h.ok" style="color:#dc2626">— {{ h.hint }}</span>
+                    </div>
+                    <div v-if="h.ok" class="mono" style="color: #475569; font-size: 11px; cursor: pointer" :title="h.txHash" @click="copyText(h.txHash, 'TxHash')">
+                      TxHash: {{ shortHash(h.txHash) }}
+                    </div>
+                    <div v-else class="mono" style="color: #94a3b8; font-size: 11px">
+                      TxHash: 未生成（链上无记录）
+                    </div>
+                  </div>
                 </a-timeline-item>
               </a-timeline>
             </div>
@@ -866,6 +899,41 @@ function resizeChart() {
   background: #eef2ff;
   border-radius: 6px;
   font-size: 12px;
+}
+
+.anchor-tx {
+  border: 1px solid #bbf7d0;
+  background: #f0fdf4;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+}
+
+.anchor-tx-label {
+  font-size: 11px;
+  color: #15803d;
+  letter-spacing: 0.4px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.anchor-tx-value {
+  font-size: 12px;
+  color: #166534;
+  word-break: break-all;
+  margin: 4px 0 4px;
+  cursor: pointer;
+  line-height: 1.5;
+}
+
+.anchor-tx-value:hover {
+  color: #14532d;
+  text-decoration: underline;
+}
+
+.anchor-tx-meta {
+  font-size: 11px;
+  color: #64748b;
 }
 
 .anchor-err {

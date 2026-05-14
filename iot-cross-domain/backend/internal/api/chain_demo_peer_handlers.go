@@ -145,11 +145,14 @@ func (h *Handler) ChainDemoPeerStart(c *gin.Context) {
 		response.InternalError(c, "docker start failed: "+strings.TrimSpace(string(out)))
 		return
 	}
-	// give it a moment to come up before reporting status. Orderer needs a
-	// few extra seconds to bring its gRPC service up after the container
-	// reaches "running" state — otherwise the next anchor will see
+	// Wait for the service inside the container to be reachable, then for
+	// the gateway peer's service-discovery cache to refresh. Orderer in
+	// particular needs ~10s: container reaches "running" instantly, gRPC
+	// becomes available a few seconds later, then peer0.org1's discovery
+	// (which is what fabric-gateway uses to find an orderer) re-learns the
+	// orderer is back. If we return too early the next anchor will see
 	// "no orderers could successfully process transaction".
-	time.Sleep(5 * time.Second)
+	time.Sleep(12 * time.Second)
 	stateAfter := dockerInspectState(req.Name)
 	_ = h.auditEx(model.AuditLog{
 		Module: "chain", Action: "demo_peer_start", Operator: c.GetString("username"),
