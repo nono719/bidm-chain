@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { message as antdMessage } from 'ant-design-vue'
+import { DownloadOutlined } from '@ant-design/icons-vue'
 import dayjs from 'dayjs'
 import { apiRequest, getBaseURL, getToken } from '../api/client'
 
@@ -164,8 +165,17 @@ function resultTag(r) {
 
 <template>
   <a-card class="panel-card" title="审计日志（图5-5）">
+    <template #extra>
+      <a-space>
+        <a-tag color="blue">共 {{ logs.length }} 条</a-tag>
+        <a-button :loading="exporting" :disabled="!logs.length" @click="exportCsv">
+          <template #icon><DownloadOutlined /></template>
+          导出 CSV
+        </a-button>
+      </a-space>
+    </template>
     <a-card class="inner-card" size="small">
-      <a-row :gutter="12">
+      <a-row :gutter="12" align="middle">
         <a-col :xs="24" :lg="4">
           <a-select
             v-model:value="filters.module"
@@ -193,14 +203,13 @@ function resultTag(r) {
         <a-col :xs="24" :lg="8">
           <a-range-picker v-model:value="filters.range" show-time style="width: 100%" />
         </a-col>
-        <a-col :xs="24" :lg="6">
+        <a-col :xs="24" :lg="5">
           <a-input v-model:value="filters.q" placeholder="全文关键字 / DID / txHash" />
         </a-col>
-        <a-col :xs="24" :lg="2">
-          <a-space>
+        <a-col :xs="24" :lg="3">
+          <a-space style="display: flex; justify-content: flex-end">
             <a-button type="primary" :loading="loading" @click="search">查询</a-button>
             <a-button @click="reset">重置</a-button>
-            <a-button :loading="exporting" :disabled="!logs.length" @click="exportCsv">导出 CSV</a-button>
           </a-space>
         </a-col>
       </a-row>
