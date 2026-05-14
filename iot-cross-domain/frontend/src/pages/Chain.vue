@@ -761,7 +761,7 @@ function resizeChart() {
     <a-modal
       v-model:open="blockDetailVisible"
       :title="blockDetail ? `区块 #${blockDetail.blockHeight}` : '区块详情'"
-      width="720px"
+      width="980px"
       :footer="null"
     >
       <a-spin :spinning="blockDetailLoading">
@@ -769,20 +769,24 @@ function resizeChart() {
           <a-descriptions size="small" :column="2" bordered>
             <a-descriptions-item label="区块号">{{ blockDetail.blockHeight }}</a-descriptions-item>
             <a-descriptions-item label="链上交易数">{{ blockDetail.block?.txCount ?? '-' }}</a-descriptions-item>
-            <a-descriptions-item label="DataHash" :span="2"><span class="mono">{{ blockDetail.block?.dataHash || '-' }}</span></a-descriptions-item>
-            <a-descriptions-item label="PrevHash" :span="2"><span class="mono">{{ blockDetail.block?.previousHash || '-' }}</span></a-descriptions-item>
+            <a-descriptions-item label="DataHash" :span="2">
+              <span class="mono full-hash" :title="blockDetail.block?.dataHash" @click="copyText(blockDetail.block?.dataHash, 'DataHash')">{{ blockDetail.block?.dataHash || '-' }}</span>
+            </a-descriptions-item>
+            <a-descriptions-item label="PrevHash" :span="2">
+              <span class="mono full-hash" :title="blockDetail.block?.previousHash" @click="copyText(blockDetail.block?.previousHash, 'PrevHash')">{{ blockDetail.block?.previousHash || '-' }}</span>
+            </a-descriptions-item>
             <a-descriptions-item v-if="blockDetail.queryError" label="链上读错误" :span="2">
               <span style="color:#dc2626">{{ blockDetail.queryError }}</span>
             </a-descriptions-item>
           </a-descriptions>
 
-          <h4 style="margin-top:16px">本区块的业务锚定</h4>
+          <h4 style="margin-top:16px">本区块的业务锚定 <span style="font-weight:normal;font-size:12px;color:#94a3b8;margin-left:6px">点击哈希可复制</span></h4>
           <a-table
             :columns="[
-              { title: '业务类型', dataIndex: 'bizType', width: 130 },
-              { title: '业务参考', dataIndex: 'bizRef' },
-              { title: '摘要', dataIndex: 'digest', width: 220 },
-              { title: 'TxHash', dataIndex: 'txHash', width: 220 }
+              { title: '业务类型', dataIndex: 'bizType', key: 'bizType', width: 130 },
+              { title: '业务参考', dataIndex: 'bizRef', key: 'bizRef', width: 180 },
+              { title: '摘要', dataIndex: 'digest', key: 'digest' },
+              { title: 'TxHash', dataIndex: 'txHash', key: 'txHash' }
             ]"
             :dataSource="blockDetail.anchors || []"
             size="small"
@@ -793,8 +797,11 @@ function resizeChart() {
               <template v-if="column.dataIndex === 'bizType'">
                 <a-tag :color="bizColor(record.bizType)">{{ record.bizType }}</a-tag>
               </template>
+              <template v-else-if="column.dataIndex === 'bizRef'">
+                <span class="mono" style="font-size:11px;word-break:break-all">{{ record.bizRef }}</span>
+              </template>
               <template v-else-if="column.dataIndex === 'digest' || column.dataIndex === 'txHash'">
-                <span class="mono">{{ shortHash(record[column.dataIndex]) }}</span>
+                <span class="mono full-hash" :title="record[column.dataIndex]" @click="copyText(record[column.dataIndex], column.title)">{{ record[column.dataIndex] }}</span>
               </template>
             </template>
           </a-table>
@@ -845,6 +852,25 @@ function resizeChart() {
   font-family: var(--mono);
   color: #344054;
   word-break: break-all;
+}
+
+/* Full 64-char hashes inside the block-detail modal — show the entire
+   value, wrap across multiple lines if needed, click to copy. */
+.full-hash {
+  display: inline-block;
+  font-size: 11px;
+  line-height: 1.55;
+  color: #1e293b;
+  word-break: break-all;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+
+.full-hash:hover {
+  background: #eef2ff;
+  color: #4338ca;
 }
 
 .section-title {
