@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { message as antdMessage } from 'ant-design-vue'
 import dayjs from 'dayjs'
 import * as echarts from 'echarts'
@@ -64,14 +64,23 @@ async function loadAll() {
     }
     if (d.code === 0) devices.value = d.data
     if (a.code === 0) alerts.value = a.data
-    renderChart()
   } finally {
     loading.value = false
   }
+  // Wait for the loading=false flip to remount the slot containing
+  // chartEl before initializing ECharts (a-card replaces children with
+  // a skeleton while loading=true, so chartEl.value is null otherwise).
+  await nextTick()
+  renderChart()
 }
 
 function renderChart() {
   if (!chartEl.value) return
+  // Re-init if the DOM element changed (e.g. parent slot re-mounted).
+  if (chart && chart.getDom && chart.getDom() !== chartEl.value) {
+    try { chart.dispose() } catch (_) {}
+    chart = null
+  }
   if (!chart) {
     chart = echarts.init(chartEl.value)
   }
