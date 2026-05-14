@@ -101,9 +101,50 @@ const SCENARIO_MAP = {
 }
 const DEFAULT_SCENARIO = { key: 'device', icon: ProfileOutlined, color: '#64748b', name: '通用设备', readLabel: '读取设备数据', metricLabels: ['数值A', '数值B'] }
 
+// Aliases / fuzzy matches so devices with non-standard type strings still
+// pick a sensible scenario template instead of falling back to "unknown".
+const SCENARIO_ALIAS = [
+  // [matcher (string or regex tested case-insensitively against deviceType), mapped key]
+  // Order matters: more-specific patterns first so generic ones don't
+  // steal the match (e.g. "air-conditioner" must hit aircon, not /air/).
+  [/temp|humid|湿|温/i,                              '传感器'],
+  [/sensor/i,                                        '传感器'],
+  [/aircon|air-cond|空调|fridge|冰箱|tv|wash|洗衣/i, '智能家电'],
+  [/appliance|家电/i,                                '智能家电'],
+  [/light|灯|lamp|bulb/i,                            '智能家电'],
+  [/(?:^|[^a-z])air(?:[^a-z]|$)|pm2|pm10|环境|空气|aqi?/i, '环境监测设备'],
+  [/charger|充电桩|充电/i,                           '智能电表'],
+  [/meter|电表|功率|电能/i,                          '智能电表'],
+  [/gateway|网关|hub|路由|router/i,                  '网关'],
+  [/camera|摄像/i,                                   '摄像头'],
+  [/lock|门禁|锁/i,                                  '门禁设备'],
+  [/actuator|执行/i,                                 '执行器'],
+  [/plc|工业|controller|control/i,                   '工业控制器'],
+  [/vehicle|obd|car|车/i,                            '车载终端']
+]
+
+function resolveScenarioKey(dt) {
+  if (!dt) return null
+  if (SCENARIO_MAP[dt]) return dt
+  const s = String(dt).trim()
+  for (const [pat, mapped] of SCENARIO_ALIAS) {
+    if (pat.test(s)) return mapped
+  }
+  return null
+}
+
 const scenario = computed(() => {
   const dt = profile.value?.device?.deviceType || ''
-  return SCENARIO_MAP[dt] || DEFAULT_SCENARIO
+  const key = resolveScenarioKey(dt)
+  if (key && SCENARIO_MAP[key]) return SCENARIO_MAP[key]
+  return DEFAULT_SCENARIO
+})
+
+// Thermometer fill percentage for sensor scenario (maps temperature to 0-100%).
+const thermoPct = computed(() => {
+  const t = typeof liveMetricA.value === 'number' ? liveMetricA.value : 25
+  // Map -10°C..40°C to 0..100%
+  return Math.max(5, Math.min(95, Math.round((t + 10) * 2)))
 })
 
 // ===== Mock sensor data (driven by real device_state_updates) =====
@@ -762,6 +803,83 @@ const historyColumns = [
               <car-outlined :style="{ fontSize: '36px', color: scenario.color }" />
               <div class="scenario-mini-hint">车载终端 · 在线</div>
             </div>
+
+            <!-- Sensor: vertical thermometer bar -->
+            <div v-else-if="scenario.key === 'sensor'" class="scenario-sensor">
+              <div class="thermo">
+                <div class="thermo-stem">
+                  <div class="thermo-fill" :style="{ height: thermoPct + '%', background: scenario.color }"></div>
+                </div>
+                <div class="thermo-bulb" :style="{ background: scenario.color }"></div>
+              </div>
+              <div class="scenario-mini-hint">温度计 · {{ liveMetricA }}°C</div>
+            </div>
+
+            <!-- Environment monitor: 4 micro indicators (PM2.5/CO₂/Temp/Hum) -->
+            <div v-else-if="scenario.key === 'env'" class="scenario-env">
+              <div class="env-grid">
+                <div class="env-cell">
+                  <div class="env-cell-label">PM2.5</div>
+                  <div class="env-cell-value" :style="{ color: scenario.color }">{{ liveMetricA }}</div>
+                </div>
+                <div class="env-cell">
+                  <div class="env-cell-label">CO₂</div>
+                  <div class="env-cell-value" :style="{ color: scenario.color }">{{ liveMetricB }}</div>
+                </div>
+                <div class="env-cell">
+                  <div class="env-cell-label">温度</div>
+                  <div class="env-cell-value">{{ (20 + (profile?.lastState?.score || 80) / 10).toFixed(1) }}°</div>
+                </div>
+                <div class="env-cell">
+                  <div class="env-cell-label">湿度</div>
+                  <div class="env-cell-value">{{ Math.round(40 + (profile?.lastState?.score || 80) / 3) }}%</div>
+                </div>
+              </div>
+              <div class="scenario-mini-hint">空气质量四维实时</div>
+            </div>
+
+            <!-- Smart meter: animated power flow lane -->
+            <div v-else-if="scenario.key === 'smart-meter'" class="scenario-meter">
+              <div class="meter-flow">
+                <div class="meter-end">⚡</div>
+                <div class="meter-lane">
+                  <div class="meter-dot" v-for="i in 5" :key="i" :style="{ background: scenario.color, animationDelay: (i*0.3) + 's' }"></div>
+                </div>
+                <thunderbolt-outlined :style="{ fontSize: '24px', color: scenario.color }" />
+              </div>
+              <div class="scenario-mini-hint">{{ liveMetricA }} kW · 计费中</div>
+            </div>
+
+            <!-- Gateway: hub + 4 sub-device dots -->
+            <div v-else-if="scenario.key === 'gateway'" class="scenario-gateway">
+              <div class="gw-topology">
+                <div class="gw-hub" :style="{ background: scenario.color }">
+                  <api-outlined :style="{ fontSize: '18px', color: '#fff' }" />
+                </div>
+                <div v-for="i in 4" :key="i" class="gw-leaf" :class="'gw-leaf-' + i">
+                  <div class="gw-leaf-dot" :style="{ background: scenario.color }"></div>
+                </div>
+                <svg class="gw-lines" viewBox="0 0 120 120">
+                  <line v-for="i in 4" :key="i"
+                        :x1="60" :y1="60"
+                        :x2="60 + 50 * Math.cos((i-1) * Math.PI / 2 + Math.PI/4)"
+                        :y2="60 + 50 * Math.sin((i-1) * Math.PI / 2 + Math.PI/4)"
+                        :stroke="scenario.color" stroke-width="1" stroke-dasharray="2 2" opacity="0.5" />
+                </svg>
+              </div>
+              <div class="scenario-mini-hint">{{ liveMetricA }} 台子设备已连接</div>
+            </div>
+
+            <!-- PLC: register bar visualizer -->
+            <div v-else-if="scenario.key === 'plc'" class="scenario-plc">
+              <div class="plc-bars">
+                <div v-for="i in 8" :key="i" class="plc-bar"
+                     :style="{ height: (20 + (((profile?.lastState?.score || 80) + i*7) % 60)) + '%', background: scenario.color }"></div>
+              </div>
+              <div class="scenario-mini-hint">寄存器 R0-R7 · 周期 {{ liveMetricB }}ms</div>
+            </div>
+
+            <!-- Default / unknown -->
             <div v-else class="scenario-pulse">
               <div class="pulse-dot" :style="{ background: scenario.color }"></div>
               <div class="scenario-mini-hint">数据流实时刷新 (每 2.5s)</div>
@@ -1282,4 +1400,207 @@ const historyColumns = [
 /* Packet transition group fallback */
 .packet-enter-active, .packet-leave-active { transition: opacity 0.2s; }
 .packet-enter-from, .packet-leave-to { opacity: 0; }
+
+/* ===== Sensor: thermometer ===== */
+.scenario-sensor {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.thermo {
+  position: relative;
+  width: 24px;
+  height: 72px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.thermo-stem {
+  width: 10px;
+  flex: 1;
+  border: 2px solid #cbd5e1;
+  border-bottom: none;
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
+  background: #f1f5f9;
+  position: relative;
+  overflow: hidden;
+}
+
+.thermo-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-radius: 4px 4px 0 0;
+  transition: height 0.6s ease;
+}
+
+.thermo-bulb {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  margin-top: -4px;
+  border: 2px solid #cbd5e1;
+}
+
+/* ===== Environment monitor: 2x2 grid ===== */
+.scenario-env .env-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.env-cell {
+  padding: 6px 8px;
+  background: #f8fafc;
+  border-radius: 6px;
+  border-left: 3px solid #06b6d4;
+  text-align: center;
+}
+
+.env-cell-label {
+  font-size: 10px;
+  color: #64748b;
+  letter-spacing: 0.3px;
+}
+
+.env-cell-value {
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+/* ===== Smart meter: animated power flow ===== */
+.scenario-meter {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.meter-flow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+}
+
+.meter-end {
+  font-size: 18px;
+}
+
+.meter-lane {
+  position: relative;
+  width: 100px;
+  height: 14px;
+  background: linear-gradient(90deg, rgba(249, 115, 22, 0.1), rgba(249, 115, 22, 0.25));
+  border-radius: 999px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+}
+
+.meter-dot {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  animation: meter-flow 1.6s linear infinite;
+}
+
+@keyframes meter-flow {
+  0% { left: -10%; opacity: 0; }
+  10% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { left: 100%; opacity: 0; }
+}
+
+/* ===== Gateway: hub + leaves topology ===== */
+.scenario-gateway {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.gw-topology {
+  position: relative;
+  width: 120px;
+  height: 120px;
+}
+
+.gw-hub {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+  box-shadow: 0 0 14px rgba(59, 130, 246, 0.4);
+}
+
+.gw-leaf {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  z-index: 2;
+}
+
+.gw-leaf-dot {
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  animation: leaf-pulse 1.8s ease-in-out infinite;
+}
+
+.gw-leaf-1 { top: 12px;  right: 12px; }
+.gw-leaf-2 { bottom: 12px; right: 12px; animation-delay: 0.4s; }
+.gw-leaf-3 { bottom: 12px; left: 12px;  animation-delay: 0.8s; }
+.gw-leaf-4 { top: 12px;  left: 12px;  animation-delay: 1.2s; }
+
+@keyframes leaf-pulse {
+  0%, 100% { opacity: 0.4; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+
+.gw-lines {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* ===== PLC: register bar visualizer ===== */
+.scenario-plc {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.plc-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 70px;
+  padding: 4px;
+}
+
+.plc-bar {
+  width: 9px;
+  border-radius: 2px 2px 0 0;
+  transition: height 0.5s ease;
+  opacity: 0.85;
+}
+
+.plc-bar:nth-child(odd) { opacity: 0.6; }
 </style>
