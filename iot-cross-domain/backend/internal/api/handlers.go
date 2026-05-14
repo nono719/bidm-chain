@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -1596,6 +1597,101 @@ func (h *Handler) AuditSearch(c *gin.Context) {
 		return
 	}
 	response.OK(c, logs)
+}
+
+// AuditExport streams the same filtered query as AuditSearch, but as a CSV
+// download. UTF-8 BOM is written first so Excel renders Chinese correctly.
+// Honors the same five query params (module/result/q/from/to) and the same
+// RBAC rule (non-ADMIN sees only their own rows). Caps at 5000 rows.
+func (h *Handler) AuditExport(c *gin.Context) {
+	module := strings.TrimSpace(c.Query("module"))
+	result := strings.TrimSpace(c.Query("result"))
+	q := strings.TrimSpace(c.Query("q"))
+	fromStr := strings.TrimSpace(c.Query("from"))
+	toStr := strings.TrimSpace(c.Query("to"))
+
+	query := h.DB.Model(&model.AuditLog{})
+	if c.GetString("role") != "ADMIN" {
+		query = query.Where("operator = ?", c.GetString("username"))
+	}
+	if module != "" {
+		query = query.Where("module = ?", module)
+	}
+	if result != "" {
+		query = query.Where("result = ?", result)
+	}
+	if q != "" {
+		like := "%" + q + "%"
+		query = query.Where("message LIKE ? OR subject_did LIKE ? OR tx_hash LIKE ? OR action LIKE ? OR method LIKE ?", like, like, like, like, like)
+	}
+	if fromStr != "" {
+		if t, err := time.Parse(time.RFC3339, fromStr); err == nil {
+			query = query.Where("occurred_at >= ?", t)
+		}
+	}
+	if toStr != "" {
+		if t, err := time.Parse(time.RFC3339, toStr); err == nil {
+			query = query.Where("occurred_at <= ?", t)
+		}
+	}
+
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "5000"))
+	if limit <= 0 || limit > 50000 {
+		limit = 5000
+	}
+
+	var logs []model.AuditLog
+	if err := query.Order("id desc").Limit(limit).Find(&logs).Error; err != nil {
+		response.InternalError(c, "query failed")
+		return
+	}
+
+	filename := "audit_log_" + time.Now().Format("20060102_150405") + ".csv"
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", `attachment; filename="`+filename+`"`)
+	c.Header("Cache-Control", "no-store")
+
+	w := c.Writer
+	// UTF-8 BOM so Excel reads the CSV as UTF-8 (otherwise Chinese is garbled).
+	_, _ = w.Write([]byte{0xEF, 0xBB, 0xBF})
+
+	cw := csv.NewWriter(w)
+	defer cw.Flush()
+	_ = cw.Write([]string{
+		"时间", "模块", "动作", "操作人", "结果",
+		"合约", "调用方法", "From", "主体DID",
+		"交易哈希", "区块高度", "Gas", "消息", "详情JSON",
+	})
+	for _, r := range logs {
+		_ = cw.Write([]string{
+			r.OccurredAt.Format("2006-01-02 15:04:05"),
+			r.Module,
+			r.Action,
+			r.Operator,
+			r.Result,
+			r.Contract,
+			r.Method,
+			r.From,
+			r.SubjectDID,
+			r.TxHash,
+			strconv.FormatUint(r.BlockHeight, 10),
+			strconv.FormatUint(r.GasUsed, 10),
+			r.Message,
+			r.DetailJSON,
+		})
+	}
+	cw.Flush()
+
+	_ = h.auditEx(model.AuditLog{
+		Module:   "audit",
+		Action:   "export_csv",
+		Operator: c.GetString("username"),
+		Result:   "OK",
+		Message:  "exported " + strconv.Itoa(len(logs)) + " rows",
+		DetailJSON: mustJSON(gin.H{
+			"module": module, "result": result, "q": q, "from": fromStr, "to": toStr, "rows": len(logs),
+		}),
+	})
 }
 
 type trustPolicyReq struct {

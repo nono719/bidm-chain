@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { message as antdMessage } from 'ant-design-vue'
 import dayjs from 'dayjs'
-import { apiRequest } from '../api/client'
+import { apiRequest, getBaseURL, getToken } from '../api/client'
 
 const loading = ref(false)
 const logs = ref([])
@@ -65,6 +65,52 @@ function reset() {
   filters.q = ''
   filters.range = []
   search()
+}
+
+const exporting = ref(false)
+async function exportCsv() {
+  exporting.value = true
+  try {
+    const params = new URLSearchParams()
+    if (filters.module !== 'ALL') params.set('module', filters.module)
+    if (filters.result !== 'ALL') params.set('result', filters.result)
+    if (filters.q) params.set('q', filters.q)
+    if (filters.range && filters.range.length === 2) {
+      const [a, b] = filters.range
+      if (a) params.set('from', dayjs(a).toISOString())
+      if (b) params.set('to', dayjs(b).toISOString())
+    }
+    params.set('limit', '5000')
+
+    const resp = await fetch(`${getBaseURL()}/api/audit/export?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${getToken()}` }
+    })
+    if (!resp.ok) {
+      antdMessage.error(`导出失败：HTTP ${resp.status}`)
+      return
+    }
+
+    // Derive filename from Content-Disposition; fall back to a stamp.
+    const cd = resp.headers.get('Content-Disposition') || ''
+    let filename = `audit_log_${dayjs().format('YYYYMMDD_HHmmss')}.csv`
+    const m = cd.match(/filename="([^"]+)"/)
+    if (m) filename = m[1]
+
+    const blob = await resp.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    antdMessage.success(`已导出 ${filename}`)
+  } catch (e) {
+    antdMessage.error(`导出异常：${e?.message || e}`)
+  } finally {
+    exporting.value = false
+  }
 }
 
 onMounted(search)
@@ -154,6 +200,7 @@ function resultTag(r) {
           <a-space>
             <a-button type="primary" :loading="loading" @click="search">查询</a-button>
             <a-button @click="reset">重置</a-button>
+            <a-button :loading="exporting" :disabled="!logs.length" @click="exportCsv">导出 CSV</a-button>
           </a-space>
         </a-col>
       </a-row>

@@ -110,6 +110,7 @@ func main() {
 		auth.POST("/oracle/demo/simulate", h.OracleDemoSimulate)
 		auth.GET("/audit/logs", h.AuditLogs)
 		auth.GET("/audit/search", h.AuditSearch)
+		auth.GET("/audit/export", h.AuditExport)
 		auth.GET("/chain/info", h.ChainInfo)
 		auth.GET("/chain/topology", h.ChainTopology)
 		auth.GET("/chain/blocks", h.ChainBlocks)
