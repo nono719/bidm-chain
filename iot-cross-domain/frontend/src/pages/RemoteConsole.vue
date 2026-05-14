@@ -26,8 +26,10 @@ import { apiRequest, getBaseURL, getToken } from '../api/client'
 const route = useRoute()
 const router = useRouter()
 
-const deviceDid = ref(route.query.deviceDid || '')
+const deviceDid = ref(route.query.deviceDid || '')      // SOURCE device (session.deviceDid)
 const targetDomain = ref(route.query.targetDomain || '')
+const targetDeviceDid = ref('')                          // OPERATION target (a device in targetDomain)
+const targetDevices = ref([])                            // devices available in targetDomain
 
 const session = ref(null)
 const sessionLoading = ref(false)
@@ -294,8 +296,37 @@ async function callRemote(path, method = 'GET', body) {
     'X-Device-DID': encodeURIComponent(deviceDid.value),
     'X-Target-Domain': encodeURIComponent(targetDomain.value)
   }
+  // When the operator has picked a specific device in the target domain,
+  // pass it so the backend operates on THAT device (not the source one).
+  if (targetDeviceDid.value && targetDeviceDid.value !== deviceDid.value) {
+    headers['X-Target-Device-DID'] = encodeURIComponent(targetDeviceDid.value)
+  }
   const r = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined })
   return await r.json().catch(() => null)
+}
+
+async function loadTargetDevices() {
+  if (!deviceDid.value || !targetDomain.value) return
+  const url = `/api/cross/target-devices?deviceDid=${encodeURIComponent(deviceDid.value)}&targetDomain=${encodeURIComponent(targetDomain.value)}`
+  const res = await apiRequest(url)
+  if (res?.code === 0) {
+    targetDevices.value = res.data?.items || []
+    // Default to first ACTIVE target device (if any); fall back to source device.
+    if (!targetDeviceDid.value && targetDevices.value.length > 0) {
+      targetDeviceDid.value = targetDevices.value[0].deviceDid
+    } else if (!targetDeviceDid.value) {
+      targetDeviceDid.value = deviceDid.value
+    }
+  }
+}
+
+async function switchTargetDevice(did) {
+  targetDeviceDid.value = did
+  // Reset displayed data + immediately refetch for the new target.
+  profile.value = null
+  telemetry.value = []
+  auditTrail.value = []
+  await Promise.all([readProfile(), readAudit()])
 }
 
 async function readProfile() {
@@ -350,8 +381,12 @@ async function executeOp(operation, payload) {
   const opLabels = { RESTART_DEVICE: '重启设备', WRITE_DEVICE_CONFIG: '下发配置', ADMIN_FIRMWARE_UPGRADE: '固件升级' }
   flyPacket('write', opLabels[operation] || operation, opColors[operation] || '#f59e0b')
   try {
+    // body.deviceDid carries the operation-target DID — the same value
+    // the X-Target-Device-DID header carries — so the backend payload
+    // and header agree on which device is being mutated.
+    const opDID = targetDeviceDid.value || deviceDid.value
     const body = {
-      deviceDid: deviceDid.value,
+      deviceDid: opDID,
       domainCode: targetDomain.value,
       operation,
       payload: typeof payload === 'string' ? payload : JSON.stringify(payload || {})
@@ -434,6 +469,7 @@ onMounted(async () => {
   await loadSession()
   startTtlTimer()
   if (tokenActive.value) {
+    await loadTargetDevices()
     await Promise.all([readProfile(), readAudit()])
     refreshLiveMetrics()
   }
@@ -536,9 +572,41 @@ const historyColumns = [
     <div class="cross-end cross-end-tgt">
       <div class="cross-end-label">目标域</div>
       <div class="cross-end-value">{{ session?.toDomain || '-' }}</div>
-      <div class="cross-end-sub mono">{{ profile?.device?.deviceDid?.slice(0, 26) || '-' }}…</div>
+      <div class="cross-end-sub mono">{{ targetDevices.length }} 台可访问设备</div>
     </div>
   </div>
+
+  <!-- Target device picker (only when token active and > 1 device exists) -->
+  <a-card v-if="tokenActive && targetDevices.length" class="target-picker-card" size="small">
+    <div class="target-picker">
+      <div class="target-picker-left">
+        <div class="target-picker-label">当前操作目标设备</div>
+        <a-select
+          :value="targetDeviceDid"
+          @update:value="switchTargetDevice"
+          :options="targetDevices.map(d => ({ value: d.deviceDid, label: `${d.displayName || '未命名'} · ${d.deviceType}`, ...d }))"
+          style="width: 100%; max-width: 520px"
+          show-search
+          optionFilterProp="label"
+        >
+          <template #option="option">
+            <div style="display: flex; flex-direction: column; gap: 2px;">
+              <span><a-tag :color="option.deviceType?.includes('环境') ? 'cyan' : 'blue'" style="margin-right: 4px">{{ option.deviceType }}</a-tag>{{ option.displayName || '未命名设备' }}</span>
+              <span class="mono" style="font-size: 11px; color: #94a3b8;">{{ option.deviceDid }}</span>
+            </div>
+          </template>
+        </a-select>
+      </div>
+      <div class="target-picker-right">
+        <a-tag :color="targetDeviceDid && targetDeviceDid !== deviceDid ? 'green' : 'orange'">
+          {{ targetDeviceDid && targetDeviceDid !== deviceDid
+              ? '✓ 已切换到目标域设备'
+              : '⚠ 当前在操作源设备本身' }}
+        </a-tag>
+        <a-button type="link" size="small" @click="loadTargetDevices">刷新设备列表</a-button>
+      </div>
+    </div>
+  </a-card>
 
   <a-row :gutter="14" class="rc-root">
     <!-- LEFT: token + protocol + last receipt -->
@@ -1400,6 +1468,41 @@ const historyColumns = [
 /* Packet transition group fallback */
 .packet-enter-active, .packet-leave-active { transition: opacity 0.2s; }
 .packet-enter-from, .packet-leave-to { opacity: 0; }
+
+/* ===== Target device picker ===== */
+.target-picker-card {
+  margin-bottom: 12px;
+  border-radius: 12px;
+  border-left: 3px solid #4453d9;
+}
+
+.target-picker {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.target-picker-left {
+  flex: 1;
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.target-picker-label {
+  font-size: 11px;
+  color: #64748b;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+.target-picker-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 
 /* ===== Sensor: thermometer ===== */
 .scenario-sensor {

@@ -1192,14 +1192,30 @@ func (h *Handler) ProtectedOperation(c *gin.Context) {
 		return
 	}
 
+	// Cross-domain semantics:
+	//   srcDID = source device that holds the AuthToken (session.deviceDID)
+	//   opDID  = device actually being operated on (may belong to target domain)
+	// Middleware sets both; fall back to req.DeviceDID if missing.
+	opDID := c.GetString("crossOpDeviceDid")
+	if opDID == "" {
+		opDID = req.DeviceDID
+	}
+	srcDID := c.GetString("crossSrcDeviceDid")
+	if srcDID == "" {
+		srcDID = req.DeviceDID
+	}
+
 	var device model.Device
-	if err := h.DB.Where("device_d_id = ?", req.DeviceDID).First(&device).Error; err != nil {
+	if err := h.DB.Where("device_d_id = ?", opDID).First(&device).Error; err != nil {
 		response.BadRequest(c, "device not found")
 		return
 	}
+	// Operator must either be ADMIN or own the SOURCE side of the
+	// cross-domain session — they don't need to "own" the target device.
 	if c.GetString("role") != "ADMIN" {
-		if device.DomainCode != c.GetString("domainCode") {
-			response.Forbidden(c, "device not in your domain")
+		var src model.Device
+		if err := h.DB.Where("device_d_id = ?", srcDID).First(&src).Error; err != nil || src.DomainCode != c.GetString("domainCode") {
+			response.Forbidden(c, "source device not in your domain")
 			return
 		}
 	}
@@ -1212,7 +1228,7 @@ func (h *Handler) ProtectedOperation(c *gin.Context) {
 		response.Forbidden(c, "device runtime state is not trusted")
 		return
 	}
-	session, reason := h.latestUsableVerifiedSession(req.DeviceDID, targetDomain)
+	session, reason := h.latestUsableVerifiedSession(srcDID, targetDomain)
 	if session == nil {
 		response.Forbidden(c, reason)
 		return
@@ -1232,7 +1248,7 @@ func (h *Handler) ProtectedOperation(c *gin.Context) {
 	}
 
 	op := model.ProtectedOperation{
-		DeviceDID:  req.DeviceDID,
+		DeviceDID:  opDID,
 		DomainCode: req.DomainCode,
 		Operation:  meta.Operation,
 		Payload:    req.Payload,
@@ -1257,7 +1273,7 @@ func (h *Handler) ProtectedOperation(c *gin.Context) {
 	var chainReceipt gin.H
 	isWrite := meta.RequiredPermission == "WRITE" || meta.RequiredPermission == "ADMIN"
 	if isWrite && effectErr == nil {
-		anchored, err := h.AnchorOpOnChain("protected_op", req.DeviceDID, req.Operation+"|"+req.Payload)
+		anchored, err := h.AnchorOpOnChain("protected_op", opDID, req.Operation+"|"+req.Payload)
 		if err == nil && anchored != nil {
 			chainReceipt = h.enrichChainReceipt(anchored.TxHash, anchored.BlockHeight)
 		} else if err != nil {
@@ -1272,9 +1288,9 @@ func (h *Handler) ProtectedOperation(c *gin.Context) {
 		Result:     "OK",
 		Contract:   "",
 		Method:     meta.Operation,
-		SubjectDID: req.DeviceDID,
+		SubjectDID: opDID,
 		Message:    meta.Operation,
-		DetailJSON: mustJSON(gin.H{"payload": req.Payload, "domain": req.DomainCode, "requiredPermission": meta.RequiredPermission, "resource": meta.Resource, "effect": effectMsg}),
+		DetailJSON: mustJSON(gin.H{"payload": req.Payload, "domain": req.DomainCode, "srcDeviceDid": srcDID, "requiredPermission": meta.RequiredPermission, "resource": meta.Resource, "effect": effectMsg}),
 	}
 	if chainReceipt != nil {
 		if tx, ok := chainReceipt["txHash"].(string); ok {

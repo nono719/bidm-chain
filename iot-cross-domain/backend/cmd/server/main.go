@@ -52,6 +52,7 @@ func main() {
 			"Authorization",
 			"X-Device-DID",
 			"X-Target-Domain",
+			"X-Target-Device-DID",
 		}, ","))
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(204)
@@ -127,6 +128,7 @@ func main() {
 		auth.GET("/operations/catalog", h.ListOperationCatalog)
 		auth.GET("/operations/history", h.ListOperationHistory)
 		auth.GET("/cross/active-session", h.CrossActiveSession)
+		auth.GET("/cross/target-devices", h.CrossTargetDevices)
 
 		protected := auth.Group("/operations")
 		protected.Use(middleware.RequireCrossDomainAuth(conn))

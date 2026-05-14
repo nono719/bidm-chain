@@ -23,7 +23,13 @@ import (
 // ============================================================
 
 func (h *Handler) RemoteProfile(c *gin.Context) {
-	deviceDID := middleware.HeaderDecoded(c, "X-Device-DID")
+	// Prefer the resolved operation-target DID set by the cross-domain
+	// middleware (honours X-Target-Device-DID); fall back to the raw
+	// X-Device-DID header if the middleware didn't run (defensive).
+	deviceDID := c.GetString("crossOpDeviceDid")
+	if deviceDID == "" {
+		deviceDID = middleware.HeaderDecoded(c, "X-Device-DID")
+	}
 	if deviceDID == "" {
 		response.BadRequest(c, "X-Device-DID required")
 		return
@@ -77,7 +83,13 @@ func (h *Handler) RemoteProfile(c *gin.Context) {
 }
 
 func (h *Handler) RemoteTelemetry(c *gin.Context) {
-	deviceDID := middleware.HeaderDecoded(c, "X-Device-DID")
+	// Prefer the resolved operation-target DID set by the cross-domain
+	// middleware (honours X-Target-Device-DID); fall back to the raw
+	// X-Device-DID header if the middleware didn't run (defensive).
+	deviceDID := c.GetString("crossOpDeviceDid")
+	if deviceDID == "" {
+		deviceDID = middleware.HeaderDecoded(c, "X-Device-DID")
+	}
 	if deviceDID == "" {
 		response.BadRequest(c, "X-Device-DID required")
 		return
@@ -105,7 +117,13 @@ func (h *Handler) RemoteTelemetry(c *gin.Context) {
 }
 
 func (h *Handler) RemoteAuditTrail(c *gin.Context) {
-	deviceDID := middleware.HeaderDecoded(c, "X-Device-DID")
+	// Prefer the resolved operation-target DID set by the cross-domain
+	// middleware (honours X-Target-Device-DID); fall back to the raw
+	// X-Device-DID header if the middleware didn't run (defensive).
+	deviceDID := c.GetString("crossOpDeviceDid")
+	if deviceDID == "" {
+		deviceDID = middleware.HeaderDecoded(c, "X-Device-DID")
+	}
 	if deviceDID == "" {
 		response.BadRequest(c, "X-Device-DID required")
 		return
@@ -321,6 +339,50 @@ func (h *Handler) AnchorOpOnChain(bizType, bizRef, payload string) (*chain.Ancho
 		BlockHeight: res.BlockHeight,
 	}).Error
 	return &res, nil
+}
+
+// ============================================================
+// CrossTargetDevices — list devices in the target domain that this
+// operator can address with the current VERIFIED session.
+// Used by the RemoteConsole's "target device" picker so a domain-a
+// operator can pick which domain-b device to operate against.
+// ============================================================
+
+func (h *Handler) CrossTargetDevices(c *gin.Context) {
+	deviceDID := strings.TrimSpace(c.Query("deviceDid"))
+	targetDomain := strings.TrimSpace(c.Query("targetDomain"))
+	if deviceDID == "" || targetDomain == "" {
+		response.BadRequest(c, "deviceDid and targetDomain required")
+		return
+	}
+	session, reason := h.latestUsableVerifiedSession(deviceDID, targetDomain)
+	if session == nil {
+		response.Forbidden(c, "no usable session: "+reason)
+		return
+	}
+	var devs []model.Device
+	if err := h.DB.Where("domain_code = ? AND lifecycle = ?", targetDomain, "ACTIVE").
+		Order("id desc").Find(&devs).Error; err != nil {
+		response.InternalError(c, err.Error())
+		return
+	}
+	out := make([]gin.H, 0, len(devs))
+	for _, d := range devs {
+		out = append(out, gin.H{
+			"deviceDid":    d.DeviceDID,
+			"displayName":  d.DisplayName,
+			"deviceType":   d.DeviceType,
+			"runtimeState": d.RuntimeState,
+			"lifecycle":    d.Lifecycle,
+			"domainCode":   d.DomainCode,
+		})
+	}
+	response.OK(c, gin.H{
+		"sessionRequestId": session.RequestID,
+		"toDomain":         session.ToDomainCode,
+		"items":            out,
+		"count":            len(out),
+	})
 }
 
 // ============================================================
