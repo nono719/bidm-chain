@@ -33,7 +33,7 @@
 ### 4.1 启动 Fabric 联盟链与链码
 
 ```bash
-cd /Users/chenminggang/Documents/trae_projects/iot-cross-domain/fabric
+cd /Users/chenminggang/claude/trae_projects/iot-cross-domain/fabric
 bash setup_test_network.sh
 ```
 
@@ -43,13 +43,15 @@ bash setup_test_network.sh
 docker run -d --name bidm-mysql \
   -e MYSQL_ROOT_PASSWORD=root \
   -e MYSQL_DATABASE=iot_auth \
-  -p 3306:3306 mysql:8.0
+  -p 3307:3306 mysql:8.0
 ```
+
+> 注意：宿主端口建议 **3307**（避免与本机已有的 3306 冲突）。`run_with_fabric_test_network.sh` 会自动通过 `docker inspect` 探测容器实际映射端口生成 `MYSQL_DSN`，无需手动改。
 
 ### 4.3 启动后端
 
 ```bash
-cd /Users/chenminggang/Documents/trae_projects/iot-cross-domain/backend
+cd /Users/chenminggang/claude/trae_projects/iot-cross-domain/backend
 bash run_with_fabric_test_network.sh
 ```
 
@@ -58,7 +60,7 @@ bash run_with_fabric_test_network.sh
 ### 4.4 启动前端
 
 ```bash
-cd /Users/chenminggang/Documents/trae_projects/iot-cross-domain/frontend
+cd /Users/chenminggang/claude/trae_projects/iot-cross-domain/frontend
 bash start_frontend.sh
 ```
 
@@ -67,6 +69,114 @@ bash start_frontend.sh
 - 前端：`http://localhost:5173`
 - 后端健康检查：`http://localhost:8080/healthz`
 - 默认管理员：`admin / 123456`
+
+### 4.5 服务状态检查
+
+任何时候排查"系统起没起来"，按这一个顺序检查四件事：
+
+```bash
+# 1. 联盟链 + MySQL 容器（应该看到 4 个 Up）
+docker ps --format '{{.Names}}\t{{.Status}}' | grep -E "peer0|orderer|mysql"
+
+# 2. 后端
+curl http://localhost:8080/healthz
+# 期待: {"status":"ok"}
+
+# 3. 前端
+curl -o /dev/null -w "HTTP %{http_code}\n" http://localhost:5173
+# 期待: HTTP 200
+
+# 4. 端口占用情况
+lsof -i :8080 -i :5173 | grep LISTEN
+```
+
+四个容器名（端口）：
+
+| 容器 | 用途 | 端口 |
+|---|---|---|
+| `peer0.org1.example.com` | Fabric Org1 Peer | 7051 / 9444 |
+| `peer0.org2.example.com` | Fabric Org2 Peer | 9051 / 9445 |
+| `orderer.example.com` | Fabric Raft 排序节点 | 7050 |
+| `bidm-mysql` | MySQL 业务库 | 3307→3306 |
+
+### 4.6 后台启动（演示推荐）
+
+前台运行（4.3、4.4）适合开发，但终端被占用。**演示和长时间运行**建议用 `nohup` 后台启动，日志写到 `/tmp`：
+
+```bash
+# 后端 → 后台
+cd /Users/chenminggang/claude/trae_projects/iot-cross-domain/backend
+nohup bash run_with_fabric_test_network.sh > /tmp/iot-backend.log 2>&1 &
+disown
+until curl -fsS http://localhost:8080/healthz >/dev/null 2>&1; do sleep 1; done
+echo "✓ 后端 ready"
+
+# 前端 → 后台
+cd /Users/chenminggang/claude/trae_projects/iot-cross-domain/frontend
+nohup bash start_frontend.sh > /tmp/iot-frontend.log 2>&1 &
+disown
+until curl -fsS http://localhost:5173 >/dev/null 2>&1; do sleep 1; done
+echo "✓ 前端 ready"
+```
+
+### 4.7 一键重启（前后端全部）
+
+```bash
+# 杀掉旧进程
+pkill -f "go run ./cmd/server"; pkill -f "/exe/server"; pkill -f "vite"
+sleep 2
+
+# 后端
+cd /Users/chenminggang/claude/trae_projects/iot-cross-domain/backend
+nohup bash run_with_fabric_test_network.sh > /tmp/iot-backend.log 2>&1 & disown
+until curl -fsS http://localhost:8080/healthz >/dev/null 2>&1; do sleep 1; done
+
+# 前端
+cd /Users/chenminggang/claude/trae_projects/iot-cross-domain/frontend
+nohup bash start_frontend.sh > /tmp/iot-frontend.log 2>&1 & disown
+until curl -fsS http://localhost:5173 >/dev/null 2>&1; do sleep 1; done
+
+echo "✓ All services up: http://localhost:5173"
+```
+
+### 4.8 停止服务
+
+```bash
+# 仅停应用层（保留 Fabric / MySQL 容器，下次启动最快）
+pkill -f "go run ./cmd/server"; pkill -f "/exe/server"
+pkill -f "vite"
+# 兜底（按端口杀进程）
+kill $(lsof -ti :8080) 2>/dev/null
+kill $(lsof -ti :5173) 2>/dev/null
+
+# 完整停（包括容器，下次启动需要重新等链 ready）
+docker stop orderer.example.com peer0.org1.example.com peer0.org2.example.com bidm-mysql
+```
+
+### 4.9 日志查看
+
+```bash
+# 后端日志（看 Gin 路由 / Fabric 调用 / 链上锚定）
+tail -f /tmp/iot-backend.log
+
+# 前端日志（Vite 编译输出 / HMR）
+tail -f /tmp/iot-frontend.log
+
+# 容器日志
+docker logs --tail 50 orderer.example.com
+docker logs --tail 50 peer0.org1.example.com
+docker logs --tail 50 bidm-mysql
+```
+
+### 4.10 故障恢复速查
+
+| 现象 | 一句话排查 |
+|---|---|
+| 后端起来但 anchor 失败 `failed to collect enough transaction endorsements` | 两个 chaincode 容器（`dev-peer0.org1.example.com-anchorcc_*`）是否 running，`docker start <name>` 即可 |
+| 后端起来但 anchor 失败 `no orderers could successfully process transaction` | Orderer 容器没起 / 刚起没就绪，等 ~12s 再试 |
+| 前端能开但 API 401 | sessionStorage 里 token 过期，重新登录 |
+| 跨域门禁 403 `cross-domain authentication expired` | 数据库里 session.expires_at < 当前时间，重新发起跨域认证 |
+| 跨域门禁 400 `missing X-Device-DID` | 前端 fetch 调用没带 header（一般是登录态没恢复，刷新页面） |
 
 ## 5. 手动环境变量配置指南（后端）
 
@@ -98,7 +208,7 @@ export FABRIC_USE_TLS='true'
 然后运行：
 
 ```bash
-cd /Users/chenminggang/Documents/trae_projects/iot-cross-domain/backend
+cd /Users/chenminggang/claude/trae_projects/iot-cross-domain/backend
 go run ./cmd/server
 ```
 
@@ -156,7 +266,7 @@ openssl ec -in oracle-node.key -pubout -out oracle-node.pub.pem
 后端提供端到端脚本：
 
 ```bash
-cd /Users/chenminggang/Documents/trae_projects/iot-cross-domain/backend
+cd /Users/chenminggang/claude/trae_projects/iot-cross-domain/backend
 bash e2e_flow.sh
 ```
 
@@ -180,7 +290,7 @@ bash e2e_flow.sh
 ### 10.1 关闭 Fabric 网络
 
 ```bash
-cd /Users/chenminggang/Documents/trae_projects/iot-cross-domain/fabric
+cd /Users/chenminggang/claude/trae_projects/iot-cross-domain/fabric
 bash network_reset.sh
 ```
 
