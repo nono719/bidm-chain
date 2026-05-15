@@ -179,7 +179,10 @@ func (h *Handler) ChainDemoTestAnchor(c *gin.Context) {
 	bizRef := "demo-" + strconv.FormatInt(ts.Unix(), 10)
 
 	start := time.Now()
-	anchor, err := h.Chain.Anchor("demo_fault_test", bizRef, digest)
+	// Use AnchorOpOnChain so the resulting record is also written to
+	// chain_anchors — keeps the "累计上链记录" counter in sync with the
+	// on-chain block height for demo purposes.
+	anchor, err := h.AnchorOpOnChain("demo_fault_test", bizRef, digest)
 	duration := time.Since(start).Milliseconds()
 
 	if err != nil {
