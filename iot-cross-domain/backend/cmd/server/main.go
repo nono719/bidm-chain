@@ -77,6 +77,7 @@ func main() {
 		auth.POST("/domains/with-admin", h.CreateDomainWithAdmin)
 		auth.GET("/users", h.ListUsers)
 		auth.POST("/users", h.CreateUser)
+		auth.PUT("/users/:id", h.UpdateUser)
 		auth.POST("/users/:id/revoke", h.RevokeDomainAdmin)
 		auth.POST("/devices", h.CreateDevice)
 		auth.GET("/devices", h.ListDevices)

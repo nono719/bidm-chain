@@ -104,6 +104,18 @@ type createUserReq struct {
 	DomainCode  string `json:"domainCode"`
 }
 
+// updateUserReq — partial-update payload for PUT /api/users/:id.
+// All four fields are optional; pointer Password / DomainCode lets us
+// distinguish "not provided" from "empty string". DisplayName / Role
+// use empty string as the "not provided" sentinel (they're never
+// meaningfully empty for an existing user, so this is fine).
+type updateUserReq struct {
+	DisplayName string  `json:"displayName"`
+	Role        string  `json:"role"`
+	DomainCode  *string `json:"domainCode"`
+	Password    *string `json:"password"`
+}
+
 func (h *Handler) CreateUser(c *gin.Context) {
 	if c.GetString("role") != "ADMIN" {
 		response.Forbidden(c, "permission denied")
@@ -156,6 +168,145 @@ func (h *Handler) CreateUser(c *gin.Context) {
 	}
 	_ = h.auditEx(model.AuditLog{Module: "user", Action: "create", Operator: c.GetString("username"), Result: "OK", SubjectDID: "", Message: username, DetailJSON: mustJSON(gin.H{"userId": user.ID, "role": user.Role, "domainCode": user.DomainCode})})
 	response.OK(c, gin.H{"id": user.ID, "username": user.Username, "displayName": user.DisplayName, "role": user.Role, "domainCode": user.DomainCode, "createdAt": user.CreatedAt})
+}
+
+// UpdateUser modifies the editable fields of a user. Username and ID
+// stay immutable (changing either would orphan audit_log foreign keys
+// and cross-domain sessions). Only ADMIN can call.
+func (h *Handler) UpdateUser(c *gin.Context) {
+	if c.GetString("role") != "ADMIN" {
+		response.Forbidden(c, "permission denied")
+		return
+	}
+	userID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || userID == 0 {
+		response.BadRequest(c, "invalid user id")
+		return
+	}
+	var req updateUserReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "invalid request")
+		return
+	}
+	var user model.User
+	if err := h.DB.First(&user, userID).Error; err != nil {
+		response.BadRequest(c, "user not found")
+		return
+	}
+
+	// Safety: prevent operator from accidentally demoting themselves —
+	// they'd immediately lose access to fix it. Username comparison is
+	// fine because Username is immutable.
+	operator := c.GetString("username")
+	selfEdit := user.Username == operator
+
+	changes := map[string]any{}
+	detail := gin.H{"userId": user.ID, "before": gin.H{
+		"displayName": user.DisplayName, "role": user.Role, "domainCode": user.DomainCode,
+	}}
+
+	if name := strings.TrimSpace(req.DisplayName); name != "" && name != user.DisplayName {
+		changes["display_name"] = name
+	}
+
+	if r := strings.ToUpper(strings.TrimSpace(req.Role)); r != "" && r != user.Role {
+		if r != "ADMIN" && r != "DOMAIN_ADMIN" {
+			response.BadRequest(c, "invalid role")
+			return
+		}
+		if selfEdit && r != "ADMIN" {
+			response.BadRequest(c, "cannot demote yourself; ask another admin")
+			return
+		}
+		changes["role"] = r
+		// Role flip cascades into domain rules below if user didn't set one explicitly.
+	}
+
+	// Determine the role that would apply after this update (for the
+	// domain-rule check below).
+	effectiveRole := user.Role
+	if v, ok := changes["role"].(string); ok {
+		effectiveRole = v
+	}
+
+	if req.DomainCode != nil {
+		domain := strings.TrimSpace(*req.DomainCode)
+		// ADMIN: domain must be empty regardless of what was sent.
+		if effectiveRole == "ADMIN" {
+			if user.DomainCode != "" {
+				changes["domain_code"] = ""
+			}
+		} else if effectiveRole == "DOMAIN_ADMIN" {
+			if domain == "" {
+				response.BadRequest(c, "domainCode required for DOMAIN_ADMIN")
+				return
+			}
+			var d model.Domain
+			if err := h.DB.Where("code = ?", domain).First(&d).Error; err != nil {
+				response.BadRequest(c, "domain not found")
+				return
+			}
+			if domain != user.DomainCode {
+				changes["domain_code"] = domain
+			}
+		}
+	} else if effectiveRole == "ADMIN" && user.DomainCode != "" {
+		// Promoted to ADMIN without explicit domain — wipe it.
+		changes["domain_code"] = ""
+	} else if effectiveRole == "DOMAIN_ADMIN" && user.DomainCode == "" {
+		// Demoted to DOMAIN_ADMIN but no domain ever set or provided.
+		response.BadRequest(c, "domainCode required when changing to DOMAIN_ADMIN")
+		return
+	}
+
+	if req.Password != nil && *req.Password != "" {
+		if len(*req.Password) < 4 {
+			response.BadRequest(c, "password too short (min 4)")
+			return
+		}
+		hash, err := bcrypt.GenerateFromPassword([]byte(*req.Password), bcrypt.DefaultCost)
+		if err != nil {
+			response.InternalError(c, "hash failed")
+			return
+		}
+		changes["password_hash"] = string(hash)
+	}
+
+	if len(changes) == 0 {
+		response.OK(c, gin.H{
+			"id": user.ID, "username": user.Username, "displayName": user.DisplayName,
+			"role": user.Role, "domainCode": user.DomainCode,
+			"message": "no changes",
+		})
+		return
+	}
+
+	if err := h.DB.Model(&user).Updates(changes).Error; err != nil {
+		response.InternalError(c, "update failed")
+		return
+	}
+	// Reload to return canonical state.
+	_ = h.DB.First(&user, userID).Error
+
+	// Don't leak the password hash in audit log.
+	delete(changes, "password_hash")
+	if req.Password != nil && *req.Password != "" {
+		changes["password"] = "(rotated)"
+	}
+	detail["changes"] = changes
+	_ = h.auditEx(model.AuditLog{
+		Module: "user", Action: "update", Operator: operator, Result: "OK",
+		Message: user.Username, DetailJSON: mustJSON(detail),
+	})
+
+	response.OK(c, gin.H{
+		"id":          user.ID,
+		"username":    user.Username,
+		"displayName": user.DisplayName,
+		"role":        user.Role,
+		"domainCode":  user.DomainCode,
+		"createdAt":   user.CreatedAt,
+	})
 }
 
 func (h *Handler) ListUsers(c *gin.Context) {
