@@ -285,16 +285,167 @@ bash e2e_flow.sh
 - 节点公钥注册失败
   - 确认是 `BEGIN/END PUBLIC KEY` 的 PEM 公钥，不是私钥或证书。
 
-## 10. 停机与清理
+## 10. 查看链上数据（开发 / 答辩 / 排查用）
 
-### 10.1 关闭 Fabric 网络
+链上数据分两种：① 区块数据（block 元信息 + 交易列表） ② 链码状态（anchorcc 在账本里存的 key-value）。下面给三条由浅到深的查询路径。
+
+### 10.1 通过前端 UI（最直观）
+
+打开「联盟链浏览」`/chain`：
+
+| 区域 | 显示什么 |
+|---|---|
+| 顶部 KPI 卡 | 区块高度（链上实时）、累计上链笔数、节点在线数、最近上链时间 + TxHash 短码 |
+| 联盟拓扑图 | Channel / Org / Peer / Orderer / Chaincode 关系 |
+| 区块哈希链 | 最近 N 块的 DataHash + PrevHash，可直观看到前向哈希指针 |
+| 区块列表 | 倒序展示每块的业务锚定记录 |
+| 点「查看」打开区块详情 modal | DataHash / PrevHash / TxCount + 该块所有 anchor 的**完整** digest / TxHash（点击复制） |
+| 链上读验证（右下） | 输入 TxHash 或 BizRef → 后端**实时调 qscc** 取链上记录 + **anchorcc.QueryAnchor** 读 digest，与数据库副本对比一致性 |
+| 故障容错演示卡（管理员） | 「发起一次测试上链」→ 实时返回 TxHash + 区块高度 + Org1+Org2 双方背书 |
+
+### 10.2 通过后端 REST API（curl / Postman）
+
+先拿 JWT：
+
+```bash
+TOKEN=$(curl -fsS -X POST -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"123456"}' \
+  http://localhost:8080/api/auth/login \
+  | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['token'])")
+H="Authorization: Bearer $TOKEN"
+```
+
+**① 当前链整体状态**（来自 qscc.GetChainInfo）：
+
+```bash
+curl -sS -H "$H" http://localhost:8080/api/chain/info | python3 -m json.tool
+```
+返回 `height` / `currentBlockHash` / `previousBlockHash` / `totalAnchors`。
+
+**② 单个区块的元数据 + 该块内业务锚定**：
+
+```bash
+# 查区块 #5
+curl -sS -H "$H" http://localhost:8080/api/chain/blocks/5 | python3 -m json.tool
+```
+
+**③ 用 TxHash 真正去链上验证一条交易**：
+
+```bash
+curl -sS -H "$H" -H "Content-Type: application/json" -X POST \
+  -d '{"txHash":"<完整 64 位 hex>"}' \
+  http://localhost:8080/api/chain/verify | python3 -m json.tool
+```
+返回中：
+- `chainTx.validationMessage: "VALID"` — Fabric 验证码
+- `chainTx.endorsers[]` — Org1MSP/peer0.org1 + Org2MSP/peer0.org2 真实证书 + 签名
+- `digestOnChain` — anchorcc.QueryAnchor 读出的链上 digest
+- `digestInDB vs digestOnChain` — 数据库副本与链上记录对比
+
+**④ 最近 N 块的哈希链**：
+
+```bash
+curl -sS -H "$H" "http://localhost:8080/api/chain/hashchain?limit=10" | python3 -m json.tool
+```
+
+**⑤ 拓扑图数据 + 节点在线探测**：
+
+```bash
+curl -sS -H "$H" http://localhost:8080/api/chain/topology | python3 -m json.tool
+```
+
+### 10.3 通过 Fabric peer CLI 原生查（绕过后端，证明数据真在链上）
+
+**这是答辩时最有说服力的方式** —— 直接进 docker 容器跑 Fabric 自带的 peer 命令，不经过任何业务代码。
+
+**① 查整个链的状态**：
+
+```bash
+docker exec \
+  -e CORE_PEER_LOCALMSPID=Org1MSP \
+  -e CORE_PEER_MSPCONFIGPATH=/etc/hyperledger/fabric/msp \
+  -e CORE_PEER_TLS_ENABLED=true \
+  -e CORE_PEER_TLS_ROOTCERT_FILE=/etc/hyperledger/fabric/tls/ca.crt \
+  peer0.org1.example.com peer channel getinfo -c mychannel
+```
+输出：`Blockchain info: {"height":N,"currentBlockHash":"...","previousBlockHash":"..."}`
+
+**② 查 anchorcc 链码中某条业务记录**（按业务键直接读）：
+
+```bash
+docker exec peer0.org1.example.com peer chaincode query \
+  -C mychannel -n anchorcc \
+  -c '{"Args":["QueryAnchor","cross_auth","REQ-1777884842-3352"]}'
+```
+返回 JSON：`{"bizType":"...","bizRef":"...","digest":"...","timestamp":"...","createdAt":"..."}`
+
+**③ 用 TxHash 查某笔交易**（系统链码 qscc）：
+
+```bash
+docker exec peer0.org1.example.com peer chaincode query \
+  -C mychannel -n qscc \
+  -c '{"Args":["GetTransactionByID","mychannel","<完整 64 位 TxHash>"]}'
+```
+返回 protobuf 序列化字节流（含完整背书签名）。
+
+**④ 校验 digest 是否在链上**（VerifyDigest 自带零知识对比）：
+
+```bash
+docker exec peer0.org1.example.com peer chaincode query \
+  -C mychannel -n anchorcc \
+  -c '{"Args":["VerifyDigest","cross_auth","REQ-...","<digest hex>"]}'
+```
+返回 `true` 或 `false`。
+
+**⑤ 拉取完整区块 protobuf**：
+
+```bash
+docker exec peer0.org1.example.com peer channel fetch 5 /tmp/block5.pb \
+  -c mychannel -o orderer.example.com:7050 \
+  --tls --cafile /etc/hyperledger/fabric/tls/ca.crt
+
+# 拷出来用 configtxlator 解码
+docker cp peer0.org1.example.com:/tmp/block5.pb ./block5.pb
+```
+
+### 10.4 通过数据库看链上数据副本（最快，但不是链原始数据）
+
+`chain_anchors` 表保存了所有上链记录的本地副本（每笔上链时同步写入）：
+
+```bash
+docker exec bidm-mysql mysql -uroot -p6428734qwe iot_auth -e \
+  "SELECT id, biz_type, biz_ref, tx_hash, block_height, created_at FROM chain_anchors ORDER BY id DESC LIMIT 20;"
+```
+
+或在 **MySQL Workbench** 里连接：
+
+| 字段 | 值 |
+|---|---|
+| Hostname | `127.0.0.1` |
+| **Port** | **`3307`** （宿主映射端口，不是 3306！） |
+| Username | `root` |
+| Password | `6428734qwe`（可用 `docker inspect bidm-mysql` 查） |
+| Default Schema | `iot_auth` |
+
+> ⚠ 这是**业务库副本**，不是链上原始数据。要证明数据真在链上，请走 10.2 的 `/api/chain/verify` 或 10.3 的 `peer chaincode query`。
+
+### 10.5 推荐演示线（答辩 30 秒打通）
+
+1. 打开 `/chain` 页面，让评委看到拓扑图 + 区块列表
+2. 复制一笔 TxHash
+3. 右下「链上读验证」粘贴 → 现场说：「这是后端去 Fabric qscc 系统链码实时查的，看到 Org1MSP+Org2MSP **双方签名背书**，验证码 VALID，链上 digest 与数据库 digest 一致」
+4. 如果评委追问"你怎么确定不是后端伪造的" → 切到终端，跑一遍 10.3 ② `peer chaincode query ... anchorcc QueryAnchor ...`，直接拉同一条记录，digest 完全一致
+
+## 11. 停机与清理
+
+### 11.1 关闭 Fabric 网络
 
 ```bash
 cd /Users/chenminggang/claude/trae_projects/iot-cross-domain/fabric
 bash network_reset.sh
 ```
 
-### 10.2 可选：删除 MySQL 容器
+### 11.2 可选：删除 MySQL 容器
 
 ```bash
 docker rm -f bidm-mysql
